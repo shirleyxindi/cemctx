@@ -23,6 +23,7 @@ from mctx._src import base
 from mctx._src import qtransforms
 from mctx._src import seq_halving
 from mctx._src import tree as tree_lib
+from mctx._src import epistemic_tree as epistemic_tree_lib
 
 
 def switching_action_selection_wrapper(
@@ -44,6 +45,49 @@ def switching_action_selection_wrapper(
 
   return switching_action_selection_fn
 
+def epistemic_muzero_action_selection(
+    rng_key: chex.PRNGKey,
+    tree: epistemic_tree_lib.EpistemicTree,
+    node_index: chex.Numeric,
+    depth: chex.Numeric,
+    *,
+    pb_c_init: float = 1.25,
+    pb_c_base: float = 19652.0,
+    qtransform: base.QTransform = qtransforms.epistemic_qtransform_by_parent_and_siblings,
+) -> chex.Array:
+  """Returns the action selected for a node index.
+
+  See Appendix B in https://arxiv.org/pdf/1911.08265.pdf for more details.
+
+  Args:
+    rng_key: random number generator state.
+    tree: _unbatched_ MCTS tree state.
+    node_index: scalar index of the node from which to select an action.
+    depth: the scalar depth of the current node. The root has depth zero.
+    pb_c_init: constant c_1 in the PUCT formula.
+    pb_c_base: constant c_2 in the PUCT formula.
+    qtransform: a monotonic transformation to convert the Q-values to [0, 1].
+
+  Returns:
+    action: the action selected from the given node.
+  """
+  visit_counts = tree.children_visits[node_index]
+  node_visit = tree.node_visits[node_index]
+  pb_c = pb_c_init + jnp.log((node_visit + pb_c_base + 1.) / pb_c_base)
+  prior_logits = tree.children_prior_logits[node_index]
+  prior_probs = jax.nn.softmax(prior_logits)
+  policy_score = jnp.sqrt(node_visit) * pb_c * prior_probs / (visit_counts + 1)
+  chex.assert_shape([node_index, node_visit], ())
+  chex.assert_equal_shape([prior_probs, visit_counts, policy_score])
+  value_score = qtransform(tree, node_index)
+
+  # Add tiny bit of randomness for tie break
+  node_noise_score = 1e-7 * jax.random.uniform(
+      rng_key, (tree.num_actions,))
+  to_argmax = value_score + policy_score + node_noise_score
+
+  # Masking the invalid actions at the root.
+  return masked_argmax(to_argmax, tree.root_invalid_actions * (depth == 0))
 
 def muzero_action_selection(
     rng_key: chex.PRNGKey,
@@ -98,6 +142,101 @@ class GumbelMuZeroExtraData:
 
 GumbelMuZeroExtraDataType = TypeVar(  # pylint: disable=invalid-name
     "GumbelMuZeroExtraDataType", bound=GumbelMuZeroExtraData)
+
+
+def epistemic_gumbel_muzero_root_action_selection(
+    rng_key: chex.PRNGKey,
+    tree: epistemic_tree_lib.EpistemicTree[GumbelMuZeroExtraDataType],
+    node_index: chex.Numeric,
+    *,
+    num_simulations: chex.Numeric,
+    max_num_considered_actions: chex.Numeric,
+    qtransform: base.QTransform = qtransforms.epistemic_qtransform_completed_by_mix_value,
+) -> chex.Array:
+  """Returns the action selected by Sequential Halving with Gumbel.
+
+  Initially, we sample `max_num_considered_actions` actions without replacement.
+  From these, the actions with the highest `gumbel + logits + qvalues` are
+  visited first.
+
+  Args:
+    rng_key: random number generator state.
+    tree: _unbatched_ MCTS tree state.
+    node_index: scalar index of the node from which to take an action.
+    num_simulations: the simulation budget.
+    max_num_considered_actions: the number of actions sampled without
+      replacement.
+    qtransform: a monotonic transformation for the Q-values.
+
+  Returns:
+    action: the action selected from the given node.
+  """
+  del rng_key
+  chex.assert_shape([node_index], ())
+  visit_counts = tree.children_visits[node_index]
+  prior_logits = tree.children_prior_logits[node_index]
+  chex.assert_equal_shape([visit_counts, prior_logits])
+  completed_qvalues = qtransform(tree, node_index)
+
+  table = jnp.array(seq_halving.get_table_of_considered_visits(
+      max_num_considered_actions, num_simulations))
+  num_valid_actions = jnp.sum(
+      1 - tree.root_invalid_actions, axis=-1).astype(jnp.int32)
+  num_considered = jnp.minimum(
+      max_num_considered_actions, num_valid_actions)
+  chex.assert_shape(num_considered, ())
+  # At the root, the simulation_index is equal to the sum of visit counts.
+  simulation_index = jnp.sum(visit_counts, -1)
+  chex.assert_shape(simulation_index, ())
+  considered_visit = table[num_considered, simulation_index]
+  chex.assert_shape(considered_visit, ())
+  gumbel = tree.extra_data.root_gumbel
+  to_argmax = seq_halving.score_considered(
+      considered_visit, gumbel, prior_logits, completed_qvalues,
+      visit_counts)
+
+  # Masking the invalid actions at the root.
+  return masked_argmax(to_argmax, tree.root_invalid_actions)
+
+
+def epistemic_gumbel_muzero_interior_action_selection(
+    rng_key: chex.PRNGKey,
+    tree: tree_lib.Tree,
+    node_index: chex.Numeric,
+    depth: chex.Numeric,
+    *,
+    qtransform: base.QTransform = qtransforms.epistemic_qtransform_completed_by_mix_value,
+) -> chex.Array:
+  """Selects the action with a deterministic action selection.
+
+  The action is selected based on the visit counts to produce visitation
+  frequencies similar to softmax(prior_logits + qvalues).
+
+  Args:
+    rng_key: random number generator state.
+    tree: _unbatched_ MCTS tree state.
+    node_index: scalar index of the node from which to take an action.
+    depth: the scalar depth of the current node. The root has depth zero.
+    qtransform: function to obtain completed Q-values for a node.
+
+  Returns:
+    action: the action selected from the given node.
+  """
+  del rng_key, depth
+  chex.assert_shape([node_index], ())
+  visit_counts = tree.children_visits[node_index]
+  prior_logits = tree.children_prior_logits[node_index]
+  chex.assert_equal_shape([visit_counts, prior_logits])
+  completed_qvalues = qtransform(tree, node_index)
+
+  # The `prior_logits + completed_qvalues` provide an improved policy,
+  # because the missing qvalues are replaced by v_{prior_logits}(node).
+  to_argmax = _prepare_argmax_input(
+      probs=jax.nn.softmax(prior_logits + completed_qvalues),
+      visit_counts=visit_counts)
+
+  chex.assert_rank(to_argmax, 1)
+  return jnp.argmax(to_argmax, axis=-1).astype(jnp.int32)
 
 
 def gumbel_muzero_root_action_selection(

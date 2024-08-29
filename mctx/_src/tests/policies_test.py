@@ -39,6 +39,25 @@ def _make_bandit_recurrent_fn(rewards, dummy_embedding=()):
   return recurrent_fn
 
 
+def _make_epistemic_bandit_recurrent_fn(rewards, rewards_epistemic_variance, dummy_embedding=()):
+  """Returns a recurrent_fn with discount=0."""
+
+  def recurrent_fn(params, rng_key, action, embedding):
+    del params, rng_key, embedding
+    reward = rewards[jnp.arange(action.shape[0]), action]
+    reward_epistemic_variance = rewards_epistemic_variance[jnp.arange(action.shape[0]), action]
+    return mctx.EpistemicRecurrentFnOutput(
+        reward=reward,
+        reward_epistemic_variance=reward_epistemic_variance,
+        discount=jnp.zeros_like(reward),
+        prior_logits=jnp.zeros_like(rewards),
+        value=jnp.zeros_like(reward),
+        value_epistemic_variance=jnp.zeros_like(reward),
+    ), dummy_embedding
+
+  return recurrent_fn
+
+
 def _make_bandit_decision_and_chance_fns(rewards, num_chance_outcomes):
 
   def decision_recurrent_fn(params, rng_key, action, embedding):
@@ -174,6 +193,156 @@ class PoliciesTest(absltest.TestCase):
     ])
     np.testing.assert_allclose(expected_action_weights,
                                policy_output.action_weights)
+
+  def test_epistemic_muzero_policy(self):
+      root = mctx.EpistemicRootFnOutput(
+          prior_logits=jnp.array([
+              [-1.0, 0.0, 2.0, 3.0],
+          ]),
+          value=jnp.array([0.0]),
+          value_epistemic_variance=jnp.array([0.0]),
+          embedding=(),
+          beta=jnp.array([0.1]),
+      )
+      rewards = jnp.zeros_like(root.prior_logits)
+      rewards_epistemic_variance = jnp.zeros_like(root.prior_logits)
+      invalid_actions = jnp.array([
+          [0.0, 0.0, 0.0, 1.0],
+      ])
+
+      policy_output = mctx.epistemic_muzero_policy(
+          params=(),
+          rng_key=jax.random.PRNGKey(0),
+          root=root,
+          recurrent_fn=_make_epistemic_bandit_recurrent_fn(rewards, rewards_epistemic_variance),
+          num_simulations=1,
+          invalid_actions=invalid_actions,
+          dirichlet_fraction=0.0)
+      expected_action = jnp.array([2], dtype=jnp.int32)
+      np.testing.assert_array_equal(expected_action, policy_output.action)
+      expected_action_weights = jnp.array([
+          [0.0, 0.0, 1.0, 0.0],
+      ])
+      np.testing.assert_allclose(expected_action_weights,
+                                 policy_output.action_weights)
+
+  def test_epistemic_muzero_policy_test_with_uncertainty(self):
+      root = mctx.EpistemicRootFnOutput(
+          prior_logits=jnp.array([
+              [0.0, 2.0, 2.0, 7.0],
+          ]),
+          value=jnp.array([0.0]),
+          value_epistemic_variance=jnp.array([0.0]),
+          embedding=(),
+          beta=jnp.array([1.0]),
+      )
+      rewards = jnp.array([
+              [10.0, 0.0, 0.0, 0.0],
+          ])
+      rewards_epistemic_variance = jnp.array([
+              [100.0, 0.0, 0.0, 0.0],
+          ])
+      invalid_actions = jnp.array([
+          [0.0, 0.0, 0.0, 1.0],
+      ])
+
+      policy_output = mctx.epistemic_muzero_policy(
+          params=(),
+          rng_key=jax.random.PRNGKey(0),
+          root=root,
+          recurrent_fn=_make_epistemic_bandit_recurrent_fn(rewards, rewards_epistemic_variance),
+          num_simulations=20,
+          invalid_actions=invalid_actions,
+          dirichlet_fraction=0.0,
+          pb_c_init=1.0,
+          pb_c_base=5000000.0,
+      )
+      expected_action = jnp.array([0], dtype=jnp.int32)
+      np.testing.assert_array_equal(expected_action, policy_output.action)
+
+  def test_epistemic_gumbel_muzero_policy(self):
+    root_value = jnp.array([-5.0])
+    root_value_epistemic_variance = jnp.array([0.0])
+    root = mctx.EpistemicRootFnOutput(
+        prior_logits=jnp.array([
+            [0.0, -1.0, 2.0, 3.0],
+        ]),
+        value=root_value,
+        value_epistemic_variance=root_value_epistemic_variance,
+        embedding=(),
+        beta=jnp.array([1.0]),
+    )
+    rewards = jnp.array([
+        [10.0, 2.0, -2.0, 0.0],
+    ])
+    rewards_epistemic_variance = jnp.array([
+        [100.0, 1.0, 1.0, 100.0],
+    ])
+    invalid_actions = jnp.array([
+        [1.0, 0.0, 0.0, 1.0],
+    ])
+
+    value_scale = 0.05
+    maxvisit_init = 60
+    num_simulations = 17
+    max_depth = 3
+    qtransform = functools.partial(
+        mctx.epistemic_qtransform_completed_by_mix_value,
+        value_scale=value_scale,
+        maxvisit_init=maxvisit_init,
+        rescale_values=True)
+    policy_output = mctx.epistemic_gumbel_muzero_policy(
+        params=(),
+        rng_key=jax.random.PRNGKey(0),
+        root=root,
+        recurrent_fn=_make_epistemic_bandit_recurrent_fn(rewards, rewards_epistemic_variance),
+        num_simulations=num_simulations,
+        invalid_actions=invalid_actions,
+        max_depth=max_depth,
+        qtransform=qtransform,
+        gumbel_scale=1.0)
+    # Testing the action.
+    expected_action = jnp.array([1], dtype=jnp.int32)
+    np.testing.assert_array_equal(expected_action, policy_output.action)
+
+    # Testing the action_weights.
+    probs = jax.nn.softmax(jnp.where(
+        invalid_actions, -jnp.inf, root.prior_logits))
+    rewards = jnp.array([
+        [20.0, 3.0, -1.0, 10.0],
+    ])
+    mix_value = 1.0 / (num_simulations + 1) * (root_value + num_simulations * (
+        probs[:, 1] * rewards[:, 1] + probs[:, 2] * rewards[:, 2]))
+
+    completed_qvalues = jnp.array([
+        [mix_value[0], rewards[0, 1], rewards[0, 2], mix_value[0]],
+    ])
+    max_value = jnp.max(completed_qvalues, axis=-1, keepdims=True)
+    min_value = jnp.min(completed_qvalues, axis=-1, keepdims=True)
+    total_value_scale = (maxvisit_init + np.ceil(num_simulations / 2)
+                         ) * value_scale
+    rescaled_qvalues = total_value_scale * (completed_qvalues - min_value) / (
+        max_value - min_value)
+    expected_action_weights = jax.nn.softmax(
+        jnp.where(invalid_actions,
+                  -jnp.inf,
+                  root.prior_logits + rescaled_qvalues))
+    np.testing.assert_allclose(expected_action_weights,
+                               policy_output.action_weights,
+                               atol=1e-7)
+
+    # Testing the visit_counts.
+    summary = policy_output.search_tree.summary()
+    expected_visit_counts = jnp.array(
+        [[0.0, np.ceil(num_simulations / 2), num_simulations // 2, 0.0]])
+    np.testing.assert_array_equal(expected_visit_counts, summary.visit_counts)
+
+    # Testing max_depth.
+    leaf, max_found_depth = _get_deepest_leaf(
+        jax.tree.map(lambda x: x[0], policy_output.search_tree),
+        policy_output.search_tree.ROOT_INDEX)
+    self.assertEqual(max_depth, max_found_depth)
+    self.assertEqual(6, policy_output.search_tree.node_visits[0, leaf])
 
   def test_gumbel_muzero_policy(self):
     root_value = jnp.array([-5.0])

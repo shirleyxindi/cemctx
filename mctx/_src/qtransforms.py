@@ -19,6 +19,49 @@ import jax
 import jax.numpy as jnp
 
 from mctx._src import tree as tree_lib
+from mctx._src import epistemic_tree as epistemic_tree_lib
+
+
+def epistemic_qtransform_by_parent_and_siblings(
+    tree: epistemic_tree_lib.EpistemicTree,
+    node_index: chex.Numeric,
+    *,
+    epsilon: chex.Numeric = 1e-8,
+) -> chex.Array:
+  """Returns qvalues normalized by min, max over V(node) and qvalues.
+
+  Args:
+    tree: _unbatched_ MCTS tree state.
+    node_index: scalar index of the parent node.
+    epsilon: the minimum denominator for the normalization.
+
+  Returns:
+    Q-values normalized to be from the [0, 1] interval. The unvisited actions
+    will have zero Q-value. Shape `[num_actions]`.
+  """
+  chex.assert_shape(node_index, ())
+  qvalues = tree.qvalues(node_index)
+  visit_counts = tree.children_visits[node_index]
+  chex.assert_rank([qvalues, visit_counts, node_index], [1, 1, 0])
+  node_value = tree.node_values[node_index]
+  safe_qvalues = jnp.where(visit_counts > 0, qvalues, node_value)
+
+  node_value_epistemic_std = tree.node_values_epistemic_std[node_index]
+  qvalues_epistemic_std = jnp.sqrt(tree.qvalues_epistemic_variance(node_index))
+  safe_qvalues_std = jnp.where(visit_counts > 0, qvalues_epistemic_std, node_value_epistemic_std)
+
+  chex.assert_equal_shape([safe_qvalues, qvalues])
+
+  min_value = jnp.minimum(node_value + tree.beta * node_value_epistemic_std,
+                          jnp.min(safe_qvalues + tree.beta * safe_qvalues_std, axis=-1))
+  max_value = jnp.maximum(node_value + tree.beta * node_value_epistemic_std,
+                          jnp.max(safe_qvalues + tree.beta * safe_qvalues_std, axis=-1))
+
+  completed_by_min = jnp.where(visit_counts > 0, qvalues, min_value)
+  normalized = (completed_by_min - min_value) / (
+      jnp.maximum(max_value - min_value, epsilon))
+  chex.assert_equal_shape([normalized, qvalues])
+  return normalized
 
 
 def qtransform_by_min_max(
@@ -144,6 +187,79 @@ def qtransform_completed_by_mix_value(
   return visit_scale * value_scale * completed_qvalues
 
 
+def epistemic_qtransform_completed_by_mix_value(
+    tree: epistemic_tree_lib.EpistemicTree,
+    node_index: chex.Numeric,
+    *,
+    value_scale: chex.Numeric = 0.1,
+    maxvisit_init: chex.Numeric = 50.0,
+    rescale_values: bool = True,
+    use_mixed_value: bool = True,
+    epsilon: chex.Numeric = 1e-8,
+) -> chex.Array:
+  """Returns completed qvalues.
+
+  The missing Q-values of the unvisited actions are replaced by the
+  mixed value, defined in Appendix D of
+  "Policy improvement by planning with Gumbel":
+  https://openreview.net/forum?id=bERaNdoegnO
+
+  The Q-values are transformed by a linear transformation:
+    `(maxvisit_init + max(visit_counts)) * value_scale * qvalues`.
+
+  Args:
+    tree: _unbatched_ MCTS tree state.
+    node_index: scalar index of the parent node.
+    value_scale: scale for the Q-values.
+    maxvisit_init: offset to the `max(visit_counts)` in the scaling factor.
+    rescale_values: if True, scale the qvalues by `1 / (max_q - min_q)`.
+    use_mixed_value: if True, complete the Q-values with mixed value,
+      otherwise complete the Q-values with the raw value.
+    epsilon: the minimum denominator when using `rescale_values`.
+
+  Returns:
+    Completed Q-values. Shape `[num_actions]`.
+  """
+  chex.assert_shape(node_index, ())
+  qvalues = tree.qvalues(node_index)
+  qvalues_epistemic_std = jnp.sqrt(tree.qvalues_epistemic_variance(node_index))
+  visit_counts = tree.children_visits[node_index]
+
+  # Computing the mixed value and producing completed_qvalues.
+  raw_value = tree.raw_values[node_index]
+  raw_value_epistemic_std = jnp.sqrt(tree.raw_values_epistemic_variance[node_index])
+  prior_probs = jax.nn.softmax(
+      tree.children_prior_logits[node_index])
+  if use_mixed_value:
+    value = _compute_mixed_value(
+        raw_value,
+        qvalues=qvalues,
+        visit_counts=visit_counts,
+        prior_probs=prior_probs)
+    value_epistemic_std = _compute_mixed_value(
+        raw_value=raw_value_epistemic_std,
+        qvalues=qvalues_epistemic_std,
+        visit_counts=visit_counts,
+        prior_probs=prior_probs)
+  else:
+    value = raw_value
+    value_epistemic_std = raw_value_epistemic_std
+  completed_qvalues = _complete_qvalues(
+      qvalues, visit_counts=visit_counts, value=value)
+  completed_qvalues_epistemic_std = _complete_qvalues(
+      qvalues=qvalues_epistemic_std, visit_counts=visit_counts, value=value_epistemic_std)
+
+  # Scaling the Q-scores.
+  if rescale_values:
+    completedq_scores = completed_qvalues + tree.beta * completed_qvalues_epistemic_std
+    completedq_scores = _rescale_qvalues(completedq_scores, epsilon)
+  else:
+    completedq_scores = completed_qvalues + tree.beta * completed_qvalues_epistemic_std
+  maxvisit = jnp.max(visit_counts, axis=-1)
+  visit_scale = maxvisit_init + maxvisit
+  return visit_scale * value_scale * completedq_scores
+
+
 def _rescale_qvalues(qvalues, epsilon):
   """Rescales the given completed Q-values to be from the [0, 1] interval."""
   min_value = jnp.min(qvalues, axis=-1, keepdims=True)
@@ -163,7 +279,6 @@ def _complete_qvalues(qvalues, *, visit_counts, value):
       value)
   chex.assert_equal_shape([completed_qvalues, qvalues])
   return completed_qvalues
-
 
 def _compute_mixed_value(raw_value, qvalues, visit_counts, prior_probs):
   """Interpolates the raw_value and weighted qvalues.

@@ -30,7 +30,14 @@ class MctxTest(absltest.TestCase):
     self.assertTrue(hasattr(mctx, "PolicyOutput"))
     self.assertTrue(hasattr(mctx, "RootFnOutput"))
     self.assertTrue(hasattr(mctx, "RecurrentFnOutput"))
-
+    # Test EMCTS imports
+    self.assertTrue(hasattr(mctx, "epistemic_muzero_policy"))
+    self.assertTrue(hasattr(mctx, "epistemic_gumbel_muzero_policy"))
+    self.assertTrue(hasattr(mctx, "epistemic_qtransform_by_parent_and_siblings"))
+    self.assertTrue(hasattr(mctx, "epistemic_qtransform_completed_by_mix_value"))
+    self.assertTrue(hasattr(mctx, "EpistemicPolicyOutput"))
+    self.assertTrue(hasattr(mctx, "EpistemicRootFnOutput"))
+    self.assertTrue(hasattr(mctx, "EpistemicRecurrentFnOutput"))
 
 if __name__ == "__main__":
   absltest.main()

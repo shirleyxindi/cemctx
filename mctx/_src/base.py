@@ -19,7 +19,7 @@ from typing import Any, Callable, Generic, TypeVar, Tuple
 import chex
 
 from mctx._src import tree
-
+from mctx._src import epistemic_tree
 
 # Parameters are arbitrary nested structures of `chex.Array`.
 # A nested structure is either a single object, or a collection (list, tuple,
@@ -45,12 +45,32 @@ class RecurrentFnOutput:
   prior_logits: chex.Array
   value: chex.Array
 
+@chex.dataclass(frozen=True)
+class EpistemicRecurrentFnOutput:
+  """The output of a `RecurrentFn`.
+
+  reward: `[B]` an approximate reward from the state-action transition.
+  discount: `[B]` the discount between the `reward` and the `value`.
+  prior_logits: `[B, num_actions]` the logits produced by a policy network.
+  value: `[B]` an approximate value of the state after the state-action
+    transition.
+  """
+  reward: chex.Array
+  reward_epistemic_variance: chex.Array
+  discount: chex.Array
+  prior_logits: chex.Array
+  value: chex.Array
+  value_epistemic_variance: chex.Array
+
 
 Action = chex.Array
 RecurrentState = Any
 RecurrentFn = Callable[
     [Params, chex.PRNGKey, Action, RecurrentState],
     Tuple[RecurrentFnOutput, RecurrentState]]
+EpistemicRecurrentFn = Callable[
+    [Params, chex.PRNGKey, Action, RecurrentState],
+    Tuple[EpistemicRecurrentFnOutput, RecurrentState]]
 
 
 @chex.dataclass(frozen=True)
@@ -64,6 +84,21 @@ class RootFnOutput:
   prior_logits: chex.Array
   value: chex.Array
   embedding: RecurrentState
+
+@chex.dataclass(frozen=True)
+class EpistemicRootFnOutput:
+  """The output of a representation network.
+
+  prior_logits: `[B, num_actions]` the logits produced by a policy network.
+  value: `[B]` an approximate value of the current state.
+  embedding: `[B, ...]` the inputs to the next `recurrent_fn` call.
+  beta: scalar, the beta used for epistemic search
+  """
+  prior_logits: chex.Array
+  value: chex.Array
+  value_epistemic_variance: chex.Array
+  embedding: RecurrentState
+  beta: chex.Array
 
 
 # Action selection functions specify how to pick nodes to expand in the tree.
@@ -79,6 +114,9 @@ QTransform = Callable[[tree.Tree, chex.Array], chex.Array]
 LoopFn = Callable[
     [int, int, Callable[[Any, Any], Any], Tuple[chex.PRNGKey, tree.Tree]],
     Tuple[chex.PRNGKey, tree.Tree]]
+EpistemicLoopFn = Callable[
+    [int, int, Callable[[Any, Any], Any], Tuple[chex.PRNGKey, epistemic_tree.EpistemicTree]],
+    Tuple[chex.PRNGKey, epistemic_tree.EpistemicTree]]
 
 T = TypeVar("T")
 
@@ -97,6 +135,22 @@ class PolicyOutput(Generic[T]):
   action: chex.Array
   action_weights: chex.Array
   search_tree: tree.Tree[T]
+
+
+@chex.dataclass(frozen=True)
+class EpistemicPolicyOutput(Generic[T]):
+  """The output of a policy.
+
+  action: `[B]` the proposed action.
+  action_weights: `[B, num_actions]` the targets used to train a policy network.
+    The action weights sum to one. Usually, the policy network is trained by
+    cross-entropy:
+    `cross_entropy(labels=stop_gradient(action_weights), logits=prior_logits)`.
+  search_tree: `[B, ...]` the epistemic search tree of the finished search.
+  """
+  action: chex.Array
+  action_weights: chex.Array
+  search_tree: epistemic_tree.EpistemicTree[T]
 
 
 @chex.dataclass(frozen=True)

@@ -18,6 +18,7 @@ import jax
 import jax.numpy as jnp
 from mctx._src import qtransforms
 import numpy as np
+import chex
 
 
 class QtransformsTest(absltest.TestCase):
@@ -53,4 +54,4 @@ class QtransformsTest(absltest.TestCase):
 
 
 if __name__ == "__main__":
-  absltest.main()
+    absltest.main()

@@ -36,6 +36,21 @@ from mctx._src.qtransforms import qtransform_by_parent_and_siblings
 from mctx._src.qtransforms import qtransform_completed_by_mix_value
 from mctx._src.search import search
 from mctx._src.tree import Tree
+# EMCTS additionals:
+from mctx._src.action_selection import epistemic_muzero_action_selection
+from mctx._src.action_selection import epistemic_gumbel_muzero_interior_action_selection
+from mctx._src.action_selection import epistemic_gumbel_muzero_root_action_selection
+from mctx._src.base import EpistemicRecurrentFnOutput
+from mctx._src.base import EpistemicRootFnOutput
+from mctx._src.base import EpistemicLoopFn
+from mctx._src.base import EpistemicPolicyOutput
+from mctx._src.base import EpistemicRecurrentFn
+from mctx._src.policies import epistemic_muzero_policy
+from mctx._src.policies import epistemic_gumbel_muzero_policy
+from mctx._src.qtransforms import epistemic_qtransform_by_parent_and_siblings
+from mctx._src.qtransforms import epistemic_qtransform_completed_by_mix_value
+from mctx._src.epistemic_search import epistemic_search
+from mctx._src.epistemic_tree import EpistemicTree
 
 __version__ = "0.0.5"
 
@@ -62,6 +77,21 @@ __all__ = (
     "qtransform_completed_by_mix_value",
     "search",
     "stochastic_muzero_policy",
+    # EMCTS additionals:
+    "EpistemicRecurrentFnOutput",
+    "EpistemicRootFnOutput",
+    "EpistemicLoopFn",
+    "EpistemicPolicyOutput",
+    "EpistemicRecurrentFn",
+    "epistemic_muzero_policy",
+    "epistemic_gumbel_muzero_policy",
+    "epistemic_qtransform_by_parent_and_siblings",
+    "epistemic_qtransform_completed_by_mix_value",
+    "epistemic_muzero_action_selection",
+    "epistemic_gumbel_muzero_interior_action_selection",
+    "epistemic_gumbel_muzero_root_action_selection",
+    "epistemic_search",
+    "EpistemicTree",
 )
 
 #  _________________________________________
