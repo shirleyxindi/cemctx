@@ -22,13 +22,13 @@ _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _get_version():
-  with open('mctx/__init__.py') as fp:
+  with open('emctx/__init__.py') as fp:
     for line in fp:
       if line.startswith('__version__') and '=' in line:
         version = line[line.find('=') + 1:].strip(' \'"\n')
         if version:
           return version
-    raise ValueError('`__version__` not defined in `mctx/__init__.py`')
+    raise ValueError('`__version__` not defined in `emctx/__init__.py`')
 
 
 def _parse_requirements(path):
@@ -50,7 +50,7 @@ setup(
     description=('Epistemic Monte Carlo tree search in JAX.'),
     long_description=open(os.path.join(_CURRENT_DIR, 'README.md')).read(),
     long_description_content_type='text/markdown',
-    author_email='mctx-dev@google.com',
+    author_email='emctx-dev@google.com',
     keywords='jax planning reinforcement-learning python machine learning',
     packages=find_namespace_packages(exclude=['*_test.py']),
     install_requires=_parse_requirements(

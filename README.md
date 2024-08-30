@@ -15,7 +15,7 @@ with large learned environment models parameterized by deep neural networks.
 You can install the latest released version of Mctx from PyPI via:
 
 ```sh
-pip install mctx
+pip install emctx
 ```
 
 or you can install the latest development version from GitHub:
