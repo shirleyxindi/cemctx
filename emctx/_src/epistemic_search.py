@@ -303,7 +303,7 @@ def backward(
     return tree, leaf_value, leaf_value_epistemic_variance, parent
 
   leaf_index = jnp.asarray(leaf_index, dtype=jnp.int32)
-  loop_state = (tree, tree.node_values[leaf_index], tree.node_values_epistemic_std[leaf_index], leaf_index)
+  loop_state = (tree, tree.node_values[leaf_index], jnp.square(tree.node_values_epistemic_std[leaf_index]), leaf_index)
   tree, _, _, _ = jax.lax.while_loop(cond_fun, body_fun, loop_state)
 
   return tree
