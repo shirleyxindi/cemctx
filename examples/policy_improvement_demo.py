@@ -22,7 +22,7 @@ from absl import flags
 import chex
 import jax
 import jax.numpy as jnp
-import emctx
+import cemctx
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer("seed", 42, "Random seed.")
@@ -60,7 +60,7 @@ def _run_demo(rng_key: chex.PRNGKey) -> Tuple[chex.PRNGKey, DemoOutput]:
   use_mixed_value = False
 
   # The root output would be the output of MuZero representation network.
-  root = emctx.RootFnOutput(
+  root = cemctx.RootFnOutput(
       prior_logits=prior_logits,
       value=raw_value,
       # The embedding is used only to implement the MuZero model.
@@ -70,7 +70,7 @@ def _run_demo(rng_key: chex.PRNGKey) -> Tuple[chex.PRNGKey, DemoOutput]:
   recurrent_fn = _make_bandit_recurrent_fn(qvalues)
 
   # Running the search.
-  policy_output = emctx.gumbel_muzero_policy(
+  policy_output = cemctx.gumbel_muzero_policy(
       params=(),
       rng_key=search_rng,
       root=root,
@@ -78,7 +78,7 @@ def _run_demo(rng_key: chex.PRNGKey) -> Tuple[chex.PRNGKey, DemoOutput]:
       num_simulations=FLAGS.num_simulations,
       max_num_considered_actions=FLAGS.max_num_considered_actions,
       qtransform=functools.partial(
-          emctx.qtransform_completed_by_mix_value,
+          cemctx.qtransform_completed_by_mix_value,
           use_mixed_value=use_mixed_value),
   )
 
@@ -117,7 +117,7 @@ def _make_bandit_recurrent_fn(qvalues):
     # On a single-player environment, use discount from [0, 1].
     # On a zero-sum self-play environment, use discount=-1.
     discount = jnp.ones_like(reward)
-    recurrent_fn_output = emctx.RecurrentFnOutput(
+    recurrent_fn_output = cemctx.RecurrentFnOutput(
         reward=reward,
         discount=discount,
         prior_logits=jnp.zeros_like(qvalues),
