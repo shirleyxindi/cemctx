@@ -20,27 +20,27 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from emctx._src import action_selection
-from emctx._src import base
-from emctx._src import tree as tree_lib
+from cemctx._src import action_selection
+from cemctx._src import base
+from cemctx._src import epistemic_tree as epistemic_tree_lib
 
-Tree = tree_lib.Tree
+EpistemicTree = epistemic_tree_lib.EpistemicTree
 T = TypeVar("T")
 
 
-def search(
+def epistemic_search(
     params: base.Params,
     rng_key: chex.PRNGKey,
     *,
-    root: base.RootFnOutput,
-    recurrent_fn: base.RecurrentFn,
+    root: base.EpistemicRootFnOutput,
+    recurrent_fn: base.EpistemicRecurrentFn,
     root_action_selection_fn: base.RootActionSelectionFn,
     interior_action_selection_fn: base.InteriorActionSelectionFn,
     num_simulations: int,
     max_depth: Optional[int] = None,
     invalid_actions: Optional[chex.Array] = None,
     extra_data: Any = None,
-    loop_fn: base.LoopFn = jax.lax.fori_loop) -> Tree:
+    loop_fn: base.EpistemicLoopFn = jax.lax.fori_loop) -> EpistemicTree:
   """Performs a full search and returns sampled actions.
 
   In the shape descriptions, `B` denotes the batch dimension.
@@ -95,7 +95,7 @@ def search(
     # A node first expanded on simulation `i`, will have node index `i`.
     # Node 0 corresponds to the root node.
     next_node_index = tree.children_index[batch_range, parent_index, action]
-    next_node_index = jnp.where(next_node_index == Tree.UNVISITED,
+    next_node_index = jnp.where(next_node_index == EpistemicTree.UNVISITED,
                                 sim + 1, next_node_index)
     tree = expand(
         params, expand_key, tree, recurrent_fn, parent_index,
@@ -127,7 +127,7 @@ class _SimulationState(NamedTuple):
 @functools.partial(jax.vmap, in_axes=[0, 0, None, None], out_axes=0)
 def simulate(
     rng_key: chex.PRNGKey,
-    tree: Tree,
+    tree: EpistemicTree,
     action_selection_fn: base.InteriorActionSelectionFn,
     max_depth: int) -> Tuple[chex.Array, chex.Array]:
   """Traverses the tree until reaching an unvisited action or `max_depth`.
@@ -159,7 +159,7 @@ def simulate(
     # The returned action will be visited.
     depth = state.depth + 1
     is_before_depth_cutoff = depth < max_depth
-    is_visited = next_node_index != Tree.UNVISITED
+    is_visited = next_node_index != EpistemicTree.UNVISITED
     is_continuing = jnp.logical_and(is_visited, is_before_depth_cutoff)
     return _SimulationState(  # pytype: disable=wrong-arg-types  # jax-types
         rng_key=rng_key,
@@ -169,7 +169,7 @@ def simulate(
         depth=depth,
         is_continuing=is_continuing)
 
-  node_index = jnp.array(Tree.ROOT_INDEX, dtype=jnp.int32)
+  node_index = jnp.array(EpistemicTree.ROOT_INDEX, dtype=jnp.int32)
   depth = jnp.zeros((), dtype=tree.children_prior_logits.dtype)
   # pytype: disable=wrong-arg-types  # jnp-type
   initial_state = _SimulationState(
@@ -190,11 +190,11 @@ def simulate(
 def expand(
     params: chex.Array,
     rng_key: chex.PRNGKey,
-    tree: Tree[T],
-    recurrent_fn: base.RecurrentFn,
+    tree: EpistemicTree[T],
+    recurrent_fn: base.EpistemicRecurrentFn,
     parent_index: chex.Array,
     action: chex.Array,
-    next_node_index: chex.Array) -> Tree[T]:
+    next_node_index: chex.Array) -> EpistemicTree[T]:
   """Create and evaluate child nodes from given nodes and unvisited actions.
 
   Args:
@@ -214,7 +214,7 @@ def expand(
   Returns:
     tree: updated MCTS tree state.
   """
-  batch_size = tree_lib.infer_batch_size(tree)
+  batch_size = epistemic_tree_lib.infer_batch_size(tree)
   batch_range = jnp.arange(batch_size)
   chex.assert_shape([parent_index, action, next_node_index], (batch_size,))
 
@@ -228,8 +228,10 @@ def expand(
   chex.assert_shape(step.reward, [batch_size])
   chex.assert_shape(step.discount, [batch_size])
   chex.assert_shape(step.value, [batch_size])
+  chex.assert_shape(step.value_epistemic_variance, [batch_size])
+
   tree = update_tree_node(
-      tree, next_node_index, step.prior_logits, step.value, embedding)
+      tree, next_node_index, step.prior_logits, step.value, step.value_epistemic_variance, embedding)
 
   # Return updated tree topology.
   return tree.replace(
@@ -241,13 +243,17 @@ def expand(
           tree.children_discounts, step.discount, parent_index, action),
       parents=batch_update(tree.parents, parent_index, next_node_index),
       action_from_parent=batch_update(
-          tree.action_from_parent, action, next_node_index))
+          tree.action_from_parent, action, next_node_index),
+      children_rewards_epistemic_variance=batch_update(
+          tree.children_rewards_epistemic_variance, step.reward_epistemic_variance,
+          parent_index, action),
+  )
 
 
 @jax.vmap
 def backward(
-    tree: Tree[T],
-    leaf_index: chex.Numeric) -> Tree[T]:
+    tree: EpistemicTree[T],
+    leaf_index: chex.Numeric) -> EpistemicTree[T]:
   """Goes up and updates the tree until all nodes reached the root.
 
   Args:
@@ -259,12 +265,12 @@ def backward(
   """
 
   def cond_fun(loop_state):
-    _, _, index = loop_state
-    return index != Tree.ROOT_INDEX
+    _, _, _, index = loop_state
+    return index != EpistemicTree.ROOT_INDEX
 
   def body_fun(loop_state):
     # Here we update the value of our parent, so we start by reversing.
-    tree, leaf_value, index = loop_state
+    tree, leaf_value, leaf_value_epistemic_variance, index = loop_state
     parent = tree.parents[index]
     count = tree.node_visits[parent]
     action = tree.action_from_parent[index]
@@ -275,19 +281,30 @@ def backward(
     children_values = tree.node_values[index]
     children_counts = tree.children_visits[parent, action] + 1
 
+    # Propagate the uncertainty
+    reward_epistemic_variance = tree.children_rewards_epistemic_variance[parent, action]
+    leaf_value_epistemic_variance = reward_epistemic_variance + tree.children_discounts[parent, action] * tree.children_discounts[parent, action] * leaf_value_epistemic_variance
+    # Note that the leaf and the reward uncertainties are variances (sigma^2), but the averaged saved is an std (\sqrt(sigma^2))
+    parent_value_epistemic_std = (tree.node_values_epistemic_std[parent] * count + jnp.sqrt(leaf_value_epistemic_variance)) / (count + 1.0)
+    children_values_epistemic_std = tree.node_values_epistemic_std[index]
+
     tree = tree.replace(
         node_values=update(tree.node_values, parent_value, parent),
+        node_values_epistemic_std=update(tree.node_values_epistemic_std, parent_value_epistemic_std, parent),
         node_visits=update(tree.node_visits, count + 1, parent),
         children_values=update(
             tree.children_values, children_values, parent, action),
+        children_values_epistemic_std=update(
+            tree.children_values_epistemic_std, children_values_epistemic_std, parent, action),
         children_visits=update(
-            tree.children_visits, children_counts, parent, action))
+            tree.children_visits, children_counts, parent, action)
+    )
 
-    return tree, leaf_value, parent
+    return tree, leaf_value, leaf_value_epistemic_variance, parent
 
   leaf_index = jnp.asarray(leaf_index, dtype=jnp.int32)
-  loop_state = (tree, tree.node_values[leaf_index], leaf_index)
-  tree, _, _ = jax.lax.while_loop(cond_fun, body_fun, loop_state)
+  loop_state = (tree, tree.node_values[leaf_index], jnp.square(tree.node_values_epistemic_std[leaf_index]), leaf_index)
+  tree, _, _, _ = jax.lax.while_loop(cond_fun, body_fun, loop_state)
 
   return tree
 
@@ -302,11 +319,12 @@ batch_update = jax.vmap(update)
 
 
 def update_tree_node(
-    tree: Tree[T],
+    tree: EpistemicTree[T],
     node_index: chex.Array,
     prior_logits: chex.Array,
     value: chex.Array,
-    embedding: chex.Array) -> Tree[T]:
+    value_epistemic_variance: chex.Array,
+    embedding: chex.Array) -> EpistemicTree[T]:
   """Updates the tree at node index.
 
   Args:
@@ -315,12 +333,13 @@ def update_tree_node(
     prior_logits: the prior logits to fill in for the new node, of shape
       `[B, num_actions]`.
     value: the value to fill in for the new node. Shape `[B]`.
+    value_epistemic_variance: the epistemic variance of the value to fill in the new node. Shape '[B]'.
     embedding: the state embeddings for the node. Shape `[B, ...]`.
 
   Returns:
     The new tree with updated nodes.
   """
-  batch_size = tree_lib.infer_batch_size(tree)
+  batch_size = epistemic_tree_lib.infer_batch_size(tree)
   batch_range = jnp.arange(batch_size)
   chex.assert_shape(prior_logits, (batch_size, tree.num_actions))
 
@@ -331,28 +350,35 @@ def update_tree_node(
           tree.children_prior_logits, prior_logits, node_index),
       raw_values=batch_update(
           tree.raw_values, value, node_index),
+      raw_values_epistemic_variance=batch_update(
+          tree.raw_values_epistemic_variance, value_epistemic_variance, node_index),
       node_values=batch_update(
           tree.node_values, value, node_index),
+      node_values_epistemic_std=batch_update(
+          # Note that becaue the epistemic-node-"variance" is saved as std, we sqrt the variance
+          tree.node_values_epistemic_std, jnp.sqrt(value_epistemic_variance), node_index),
       node_visits=batch_update(
           tree.node_visits, new_visit, node_index),
       embeddings=jax.tree.map(
           lambda t, s: batch_update(t, s, node_index),
-          tree.embeddings, embedding))
+          tree.embeddings, embedding)
+  )
 
   return tree.replace(**updates)
 
 
 def instantiate_tree_from_root(
-    root: base.RootFnOutput,
+    root: base.EpistemicRootFnOutput,
     num_simulations: int,
     root_invalid_actions: chex.Array,
-    extra_data: Any) -> Tree:
+    extra_data: Any) -> EpistemicTree:
   """Initializes tree state at search root."""
   chex.assert_rank(root.prior_logits, 2)
   batch_size, num_actions = root.prior_logits.shape
   chex.assert_shape(root.value, [batch_size])
   num_nodes = num_simulations + 1
   data_dtype = root.value.dtype
+  beta = root.beta
   batch_node = (batch_size, num_nodes)
   batch_node_action = (batch_size, num_nodes, num_actions)
 
@@ -360,26 +386,32 @@ def instantiate_tree_from_root(
     return jnp.zeros(batch_node + x.shape[1:], dtype=x.dtype)
 
   # Create a new empty tree state and fill its root.
-  tree = Tree(
+  tree = EpistemicTree(
       node_visits=jnp.zeros(batch_node, dtype=jnp.int32),
       raw_values=jnp.zeros(batch_node, dtype=data_dtype),
+      raw_values_epistemic_variance=jnp.zeros(batch_node, dtype=data_dtype),
       node_values=jnp.zeros(batch_node, dtype=data_dtype),
-      parents=jnp.full(batch_node, Tree.NO_PARENT, dtype=jnp.int32),
+      node_values_epistemic_std=jnp.zeros(batch_node, dtype=data_dtype),
+      parents=jnp.full(batch_node, EpistemicTree.NO_PARENT, dtype=jnp.int32),
       action_from_parent=jnp.full(
-          batch_node, Tree.NO_PARENT, dtype=jnp.int32),
+          batch_node, EpistemicTree.NO_PARENT, dtype=jnp.int32),
       children_index=jnp.full(
-          batch_node_action, Tree.UNVISITED, dtype=jnp.int32),
+          batch_node_action, EpistemicTree.UNVISITED, dtype=jnp.int32),
       children_prior_logits=jnp.zeros(
           batch_node_action, dtype=root.prior_logits.dtype),
       children_values=jnp.zeros(batch_node_action, dtype=data_dtype),
+      children_values_epistemic_std=jnp.zeros(batch_node_action, dtype=data_dtype),
       children_visits=jnp.zeros(batch_node_action, dtype=jnp.int32),
       children_rewards=jnp.zeros(batch_node_action, dtype=data_dtype),
+      children_rewards_epistemic_variance=jnp.zeros(batch_node_action, dtype=data_dtype),
       children_discounts=jnp.zeros(batch_node_action, dtype=data_dtype),
       embeddings=jax.tree.map(_zeros, root.embedding),
       root_invalid_actions=root_invalid_actions,
-      extra_data=extra_data)
+      extra_data=extra_data,
+      beta=beta,
+  )
 
-  root_index = jnp.full([batch_size], Tree.ROOT_INDEX)
+  root_index = jnp.full([batch_size], EpistemicTree.ROOT_INDEX)
   tree = update_tree_node(
-      tree, root_index, root.prior_logits, root.value, root.embedding)
+      tree, root_index, root.prior_logits, root.value, root.value_epistemic_variance, root.embedding)
   return tree

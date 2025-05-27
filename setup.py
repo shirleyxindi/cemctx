@@ -22,13 +22,13 @@ _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _get_version():
-  with open('emctx/__init__.py') as fp:
+  with open('cemctx/__init__.py') as fp:
     for line in fp:
       if line.startswith('__version__') and '=' in line:
         version = line[line.find('=') + 1:].strip(' \'"\n')
         if version:
           return version
-    raise ValueError('`__version__` not defined in `emctx/__init__.py`')
+    raise ValueError('`__version__` not defined in `cemctx/__init__.py`')
 
 
 def _parse_requirements(path):
@@ -44,10 +44,10 @@ def _parse_requirements(path):
 setup(
     name='emctx',
     version=_get_version(),
-    url='https://github.com/YanivO1123/emctx',
+    url='https://github.com/shirleyxindi/cemctx',
     license='Apache 2.0',
     author='DeepMind, extended by Yaniv Oren',
-    description=('Epistemic Monte Carlo tree search in JAX.'),
+    description=('Constrained Epistemic Monte Carlo tree search in JAX.'),
     long_description=open(os.path.join(_CURRENT_DIR, 'README.md')).read(),
     long_description_content_type='text/markdown',
     author_email='emctx-dev@google.com',

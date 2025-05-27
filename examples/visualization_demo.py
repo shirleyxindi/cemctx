@@ -21,7 +21,7 @@ from absl import flags
 import chex
 import jax
 import jax.numpy as jnp
-import emctx
+import cemctx
 import pygraphviz
 
 FLAGS = flags.FLAGS
@@ -35,7 +35,7 @@ flags.DEFINE_string("output_file", "/tmp/search_tree.png",
 
 
 def convert_tree_to_graph(
-    tree: emctx.Tree,
+    tree: cemctx.Tree,
     action_labels: Optional[Sequence[str]] = None,
     batch_index: int = 0
 ) -> pygraphviz.AGraph:
@@ -137,7 +137,7 @@ def _run_demo(rng_key: chex.PRNGKey):
       prior_logits=all_prior_logits)
 
   # Running the search.
-  policy_output = emctx.gumbel_muzero_policy(
+  policy_output = cemctx.gumbel_muzero_policy(
       params=(),
       rng_key=rng_key,
       root=root,
@@ -164,7 +164,7 @@ def _make_batched_env_model(
   chex.assert_shape(values, [num_states])
   # We will start the search at state zero.
   root_state = 0
-  root = emctx.RootFnOutput(
+  root = cemctx.RootFnOutput(
       prior_logits=jnp.full([batch_size, num_actions],
                             prior_logits[root_state]),
       value=jnp.full([batch_size], values[root_state]),
@@ -176,7 +176,7 @@ def _make_batched_env_model(
     del params, rng_key
     chex.assert_shape(action, [batch_size])
     chex.assert_shape(embedding, [batch_size])
-    recurrent_fn_output = emctx.RecurrentFnOutput(
+    recurrent_fn_output = cemctx.RecurrentFnOutput(
         reward=rewards[embedding, action],
         discount=discounts[embedding, action],
         prior_logits=prior_logits[embedding],
