@@ -90,6 +90,7 @@ class EpistemicTree(Generic[T]):
   children_costs_epistemic_variance: chex.Array  # [B, N, num_actions]
   children_cost_values_epistemic_std: chex.Array  # [B, N, num_actions]
   beta_c: chex.Array   # [B]
+  cost_threshold: chex.Array  # [B]
 
   # The following attributes are class variables (and should not be set on
   # Tree instances).

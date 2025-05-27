@@ -86,6 +86,10 @@ def epistemic_muzero_action_selection(
       rng_key, (tree.num_actions,))
   to_argmax = value_score + policy_score + node_noise_score
 
+  # Get unsafe actions mask and apply it to the argmax input.
+  unsafe_actions = get_unsafe_actions(tree, node_index)
+  to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
+
   # Masking the invalid actions at the root.
   return masked_argmax(to_argmax, tree.root_invalid_actions * (depth == 0))
 
@@ -129,6 +133,10 @@ def muzero_action_selection(
   node_noise_score = 1e-7 * jax.random.uniform(
       rng_key, (tree.num_actions,))
   to_argmax = value_score + policy_score + node_noise_score
+
+  # Get unsafe actions mask and apply it to the argmax input.
+  unsafe_actions = get_unsafe_actions(tree, node_index)
+  to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
 
   # Masking the invalid actions at the root.
   return masked_argmax(to_argmax, tree.root_invalid_actions * (depth == 0))
@@ -194,6 +202,10 @@ def epistemic_gumbel_muzero_root_action_selection(
   to_argmax = seq_halving.score_considered(
       considered_visit, gumbel, prior_logits, completed_qvalues,
       visit_counts)
+  
+  # Get unsafe actions mask and apply it to the argmax input.
+  unsafe_actions = get_unsafe_actions(tree, node_index)
+  to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
 
   # Masking the invalid actions at the root.
   return masked_argmax(to_argmax, tree.root_invalid_actions)
@@ -234,6 +246,10 @@ def epistemic_gumbel_muzero_interior_action_selection(
   to_argmax = _prepare_argmax_input(
       probs=jax.nn.softmax(prior_logits + completed_qvalues),
       visit_counts=visit_counts)
+  
+  # Get unsafe actions mask and apply it to the argmax input.
+  unsafe_actions = get_unsafe_actions(tree, node_index)
+  to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
 
   chex.assert_rank(to_argmax, 1)
   return jnp.argmax(to_argmax, axis=-1).astype(jnp.int32)
@@ -289,6 +305,10 @@ def gumbel_muzero_root_action_selection(
   to_argmax = seq_halving.score_considered(
       considered_visit, gumbel, prior_logits, completed_qvalues,
       visit_counts)
+  
+  # Get unsafe actions mask and apply it to the argmax input.
+  unsafe_actions = get_unsafe_actions(tree, node_index)
+  to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
 
   # Masking the invalid actions at the root.
   return masked_argmax(to_argmax, tree.root_invalid_actions)
@@ -329,6 +349,10 @@ def gumbel_muzero_interior_action_selection(
   to_argmax = _prepare_argmax_input(
       probs=jax.nn.softmax(prior_logits + completed_qvalues),
       visit_counts=visit_counts)
+  
+  # Get unsafe actions mask and apply it to the argmax input.
+  unsafe_actions = get_unsafe_actions(tree, node_index)
+  to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
 
   chex.assert_rank(to_argmax, 1)
   return jnp.argmax(to_argmax, axis=-1).astype(jnp.int32)
@@ -353,7 +377,7 @@ def get_unsafe_actions(
   discounts = tree.children_discounts[node_index]
   beta_c = tree.beta_c
   cost_path = 0  # TODO: how to keep track of the cost of current path
-  threshold = 10  # TODO: where to store threshold? in tree or pass it to the function?
+  threshold = tree.cost_threshold
 
   costs = cost_path + discounts * cost_qvalues + beta_c * cost_qvalues_epistemic_std
 

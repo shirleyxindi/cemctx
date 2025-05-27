@@ -106,6 +106,7 @@ class EpistemicRootFnOutput:
   beta_c: chex.Array
   cost: chex.Array
   cost_epistemic_variance: chex.Array
+  cost_threshold: chex.Array
 
 
 # Action selection functions specify how to pick nodes to expand in the tree.
