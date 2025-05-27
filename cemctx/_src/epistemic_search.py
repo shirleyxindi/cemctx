@@ -302,7 +302,6 @@ def backward(
 
     # Propagate the uncertainty of costs
     cost_epistemic_variance = tree.children_costs_epistemic_variance[parent, action]
-    # TODO: should we add the cost_epistemic_variance here? our proposal says not to, but not sure if it is correct.
     leaf_cost_value_epistemic_variance = cost_epistemic_variance + tree.children_discounts[parent, action] * tree.children_discounts[parent, action] * leaf_cost_value_epistemic_variance
     parent_cost_value_epistemic_std = (tree.node_cost_values_epistemic_std[parent] * count + jnp.sqrt(leaf_cost_value_epistemic_variance)) / (count + 1.0)
     children_cost_values_epistemic_std = tree.node_cost_values_epistemic_std[index]
@@ -395,7 +394,6 @@ def update_tree_node(
       node_cost_values=batch_update(
           tree.node_cost_values, cost_value, node_index),
       node_cost_values_epistemic_std=batch_update(
-          # Note that becaue the epistemic-node-"variance" is saved as std, we sqrt the variance
           tree.node_cost_values_epistemic_std, jnp.sqrt(cost_value_epistemic_variance), node_index),
       node_visits=batch_update(
           tree.node_visits, new_visit, node_index),
@@ -465,5 +463,5 @@ def instantiate_tree_from_root(
 
   root_index = jnp.full([batch_size], EpistemicTree.ROOT_INDEX)
   tree = update_tree_node(
-      tree, root_index, root.prior_logits, root.value, root.value_epistemic_variance, root.embedding)
+      tree, root_index, root.prior_logits, root.value, root.value_epistemic_variance, root.cost_value, root.cost_value_epistemic_variance, root.embedding)
   return tree
