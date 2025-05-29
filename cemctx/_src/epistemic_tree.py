@@ -245,7 +245,7 @@ def _unbatched_cost_qvalues(tree: EpistemicTree, index: int) -> int:
 def _unbatched_cost_qvalues_epistemic_variance(tree: EpistemicTree, index: int) -> int:
   chex.assert_rank(tree.children_discounts, 2)
   return ( 
-      # TODO: shouldn't we add the variance of the cost? 
-      # gamma^2 * sigma_vc(s')^2 (+ sigma_c(s,a)^2??)
+      # variance_c(s,a) + gamma^2 * sigma_vc(s')^2
+      tree.children_costs_epistemic_variance[index] +
       tree.children_discounts[index]**2 * tree.children_cost_values_epistemic_std[index]**2
   )
