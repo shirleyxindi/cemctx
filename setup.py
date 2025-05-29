@@ -42,10 +42,10 @@ def _parse_requirements(path):
 setup(
     name="cemctx",
     version=_get_version(),
-    url="https://github.com/YanivO1123/emctx",
+    url="https://github.com/shirleyxindi/cemctx",
     license="Apache 2.0",
     author="DeepMind, extended by Yaniv Oren",
-    description=("Epistemic Monte Carlo tree search in JAX."),
+    description=("Constrained Epistemic Monte Carlo tree search in JAX."),
     long_description=open(os.path.join(_CURRENT_DIR, "README.md")).read(),
     long_description_content_type="text/markdown",
     author_email="emctx-dev@google.com",
