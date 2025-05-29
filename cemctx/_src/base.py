@@ -50,10 +50,16 @@ class EpistemicRecurrentFnOutput:
   """The output of a `RecurrentFn`.
 
   reward: `[B]` an approximate reward from the state-action transition.
+  reward_epistemic_variance: `[B]` an approximate of the epistemic variance of the reward from the state-action transition.
   discount: `[B]` the discount between the `reward` and the `value`.
   prior_logits: `[B, num_actions]` the logits produced by a policy network.
   value: `[B]` an approximate value of the state after the state-action
     transition.
+  value_epistemic_variance: `[B]` an approximate of the epistemic variance of the value of the state after the state-action transition.
+  cost: `[B]` an approximate cost of the state-action transition.
+  cost_epistemic_variance: `[B]` an approximate of the epistemic variance of the cost of the state-action transition.
+  cost_value: `[B]` an approximate cost value of the state after the state-action transition.
+  cost_value_epistemic_variance: `[B]` an approximate of the epistemic variance of the cost value of the state after the state-action transition.
   """
   reward: chex.Array
   reward_epistemic_variance: chex.Array
@@ -61,6 +67,10 @@ class EpistemicRecurrentFnOutput:
   prior_logits: chex.Array
   value: chex.Array
   value_epistemic_variance: chex.Array
+  cost: chex.Array
+  cost_epistemic_variance: chex.Array
+  cost_value: chex.Array
+  cost_value_epistemic_variance: chex.Array
 
 
 Action = chex.Array
@@ -91,14 +101,23 @@ class EpistemicRootFnOutput:
 
   prior_logits: `[B, num_actions]` the logits produced by a policy network.
   value: `[B]` an approximate value of the current state.
+  value_epistemic_variance: `[B]` an approximate of the epistemic variance of the value of the current state.
   embedding: `[B, ...]` the inputs to the next `recurrent_fn` call.
-  beta: scalar, the beta used for epistemic search
+  beta_v: scalar, the value beta used for epistemic search.
+  beta_c: scalar, the cost beta used for epistemic search.
+  cost_value: `[B]` an approximate cost value of the current state.
+  cost_value_epistemic_variance: `[B]` an approximate of the epistemic variance of the cost value of the current state.
+  cost_threshold: `[B]` the cost threshold.
   """
   prior_logits: chex.Array
   value: chex.Array
   value_epistemic_variance: chex.Array
   embedding: RecurrentState
-  beta: chex.Array
+  beta_v: chex.Array
+  beta_c: chex.Array
+  cost_value: chex.Array
+  cost_value_epistemic_variance: chex.Array
+  cost_threshold: chex.Array
 
 
 # Action selection functions specify how to pick nodes to expand in the tree.

@@ -52,10 +52,10 @@ def epistemic_qtransform_by_parent_and_siblings(
 
   chex.assert_equal_shape([safe_qvalues, qvalues])
 
-  min_value = jnp.minimum(node_value + tree.beta * node_value_epistemic_std,
-                          jnp.min(safe_qvalues + tree.beta * safe_qvalues_std, axis=-1))
-  max_value = jnp.maximum(node_value + tree.beta * node_value_epistemic_std,
-                          jnp.max(safe_qvalues + tree.beta * safe_qvalues_std, axis=-1))
+  min_value = jnp.minimum(node_value + tree.beta_v * node_value_epistemic_std,
+                          jnp.min(safe_qvalues + tree.beta_v * safe_qvalues_std, axis=-1))
+  max_value = jnp.maximum(node_value + tree.beta_v * node_value_epistemic_std,
+                          jnp.max(safe_qvalues + tree.beta_v * safe_qvalues_std, axis=-1))
 
   completed_by_min = jnp.where(visit_counts > 0, qvalues, min_value)
   normalized = (completed_by_min - min_value) / (
@@ -251,10 +251,10 @@ def epistemic_qtransform_completed_by_mix_value(
 
   # Scaling the Q-scores.
   if rescale_values:
-    completedq_scores = completed_qvalues + tree.beta * completed_qvalues_epistemic_std
+    completedq_scores = completed_qvalues + tree.beta_v * completed_qvalues_epistemic_std
     completedq_scores = _rescale_qvalues(completedq_scores, epsilon)
   else:
-    completedq_scores = completed_qvalues + tree.beta * completed_qvalues_epistemic_std
+    completedq_scores = completed_qvalues + tree.beta_v * completed_qvalues_epistemic_std
   maxvisit = jnp.max(visit_counts, axis=-1)
   visit_scale = maxvisit_init + maxvisit
   return visit_scale * value_scale * completedq_scores

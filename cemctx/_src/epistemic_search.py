@@ -230,8 +230,14 @@ def expand(
   chex.assert_shape(step.value, [batch_size])
   chex.assert_shape(step.value_epistemic_variance, [batch_size])
 
+  # Calculate discounted cumulative cost from root to the new node.
+  # TODO: should we also account for uncertainty here?
+  parent_cumulative_cost = tree.node_cumulative_costs[batch_range, parent_index]
+  cumulative_cost = parent_cumulative_cost + step.discount * step.cost
+
   tree = update_tree_node(
-      tree, next_node_index, step.prior_logits, step.value, step.value_epistemic_variance, embedding)
+      tree, next_node_index, step.prior_logits, step.value, step.value_epistemic_variance, 
+      cumulative_cost, step.cost_value, step.cost_value_epistemic_variance, embedding)
 
   # Return updated tree topology.
   return tree.replace(
@@ -247,6 +253,11 @@ def expand(
       children_rewards_epistemic_variance=batch_update(
           tree.children_rewards_epistemic_variance, step.reward_epistemic_variance,
           parent_index, action),
+      children_costs=batch_update(
+          tree.children_costs, step.cost, parent_index, action),
+      children_costs_epistemic_variance=batch_update(
+          tree.children_costs_epistemic_variance, step.cost_epistemic_variance,
+          parent_index, action)
   )
 
 
@@ -270,7 +281,7 @@ def backward(
 
   def body_fun(loop_state):
     # Here we update the value of our parent, so we start by reversing.
-    tree, leaf_value, leaf_value_epistemic_variance, index = loop_state
+    tree, leaf_value, leaf_value_epistemic_variance, leaf_cost_value, leaf_cost_value_epistemic_variance, index = loop_state
     parent = tree.parents[index]
     count = tree.node_visits[parent]
     action = tree.action_from_parent[index]
@@ -281,12 +292,25 @@ def backward(
     children_values = tree.node_values[index]
     children_counts = tree.children_visits[parent, action] + 1
 
-    # Propagate the uncertainty
+    # Propagate the uncertainty of rewards
     reward_epistemic_variance = tree.children_rewards_epistemic_variance[parent, action]
     leaf_value_epistemic_variance = reward_epistemic_variance + tree.children_discounts[parent, action] * tree.children_discounts[parent, action] * leaf_value_epistemic_variance
     # Note that the leaf and the reward uncertainties are variances (sigma^2), but the averaged saved is an std (\sqrt(sigma^2))
     parent_value_epistemic_std = (tree.node_values_epistemic_std[parent] * count + jnp.sqrt(leaf_value_epistemic_variance)) / (count + 1.0)
     children_values_epistemic_std = tree.node_values_epistemic_std[index]
+
+    # Cost values
+    cost = tree.children_costs[parent, action]
+    leaf_cost_value = cost + tree.children_discounts[parent, action] * leaf_cost_value
+    parent_cost_value = (
+        tree.node_cost_values[parent] * count + leaf_cost_value) / (count + 1.0)
+    children_cost_values = tree.node_cost_values[index]
+
+    # Propagate the uncertainty of costs
+    cost_epistemic_variance = tree.children_costs_epistemic_variance[parent, action]
+    leaf_cost_value_epistemic_variance = cost_epistemic_variance + tree.children_discounts[parent, action] * tree.children_discounts[parent, action] * leaf_cost_value_epistemic_variance
+    parent_cost_value_epistemic_std = (tree.node_cost_values_epistemic_std[parent] * count + jnp.sqrt(leaf_cost_value_epistemic_variance)) / (count + 1.0)
+    children_cost_values_epistemic_std = tree.node_cost_values_epistemic_std[index]
 
     tree = tree.replace(
         node_values=update(tree.node_values, parent_value, parent),
@@ -297,13 +321,21 @@ def backward(
         children_values_epistemic_std=update(
             tree.children_values_epistemic_std, children_values_epistemic_std, parent, action),
         children_visits=update(
-            tree.children_visits, children_counts, parent, action)
+            tree.children_visits, children_counts, parent, action),
+        node_cost_values=update(
+            tree.node_cost_values, parent_cost_value, parent),
+        node_cost_values_epistemic_std=update(
+            tree.node_cost_values_epistemic_std, parent_cost_value_epistemic_std, parent),
+        children_cost_values=update(
+            tree.children_cost_values, children_cost_values, parent, action),
+        children_cost_values_epistemic_std=update(
+            tree.children_cost_values_epistemic_std, children_cost_values_epistemic_std, parent, action)
     )
 
-    return tree, leaf_value, leaf_value_epistemic_variance, parent
+    return tree, leaf_value, leaf_value_epistemic_variance, leaf_cost_value, leaf_cost_value_epistemic_variance, parent
 
   leaf_index = jnp.asarray(leaf_index, dtype=jnp.int32)
-  loop_state = (tree, tree.node_values[leaf_index], jnp.square(tree.node_values_epistemic_std[leaf_index]), leaf_index)
+  loop_state = (tree, tree.node_values[leaf_index], jnp.square(tree.node_values_epistemic_std[leaf_index]), tree.node_cost_values[leaf_index], jnp.square(tree.node_cost_values_epistemic_std[leaf_index]), leaf_index)
   tree, _, _, _ = jax.lax.while_loop(cond_fun, body_fun, loop_state)
 
   return tree
@@ -324,6 +356,9 @@ def update_tree_node(
     prior_logits: chex.Array,
     value: chex.Array,
     value_epistemic_variance: chex.Array,
+    cumulative_cost: chex.Array,
+    cost_value: chex.Array,
+    cost_value_epistemic_variance: chex.Array,
     embedding: chex.Array) -> EpistemicTree[T]:
   """Updates the tree at node index.
 
@@ -334,6 +369,8 @@ def update_tree_node(
       `[B, num_actions]`.
     value: the value to fill in for the new node. Shape `[B]`.
     value_epistemic_variance: the epistemic variance of the value to fill in the new node. Shape '[B]'.
+    cost_value: the cost value to fill in for the new node. Shape `[B]`.
+    cost_value_epistemic_variance: the epistemic variance of the cost value to fill in the new node. Shape '[B]'.
     embedding: the state embeddings for the node. Shape `[B, ...]`.
 
   Returns:
@@ -357,8 +394,18 @@ def update_tree_node(
       node_values_epistemic_std=batch_update(
           # Note that becaue the epistemic-node-"variance" is saved as std, we sqrt the variance
           tree.node_values_epistemic_std, jnp.sqrt(value_epistemic_variance), node_index),
+      raw_cost_values=batch_update(
+          tree.raw_cost_values, cost_value, node_index),
+      raw_cost_values_epistemic_variance=batch_update(
+          tree.raw_cost_values_epistemic_variance, cost_value_epistemic_variance, node_index),
+      node_cost_values=batch_update(
+          tree.node_cost_values, cost_value, node_index),
+      node_cost_values_epistemic_std=batch_update(
+          tree.node_cost_values_epistemic_std, jnp.sqrt(cost_value_epistemic_variance), node_index),
       node_visits=batch_update(
           tree.node_visits, new_visit, node_index),
+      node_cumulative_costs=batch_update(
+          tree.node_cumulative_costs, cumulative_cost, node_index),
       embeddings=jax.tree.map(
           lambda t, s: batch_update(t, s, node_index),
           tree.embeddings, embedding)
@@ -378,7 +425,9 @@ def instantiate_tree_from_root(
   chex.assert_shape(root.value, [batch_size])
   num_nodes = num_simulations + 1
   data_dtype = root.value.dtype
-  beta = root.beta
+  beta_v = root.beta_v
+  beta_c = root.beta_c
+  cost_threshold = root.cost_threshold
   batch_node = (batch_size, num_nodes)
   batch_node_action = (batch_size, num_nodes, num_actions)
 
@@ -408,10 +457,22 @@ def instantiate_tree_from_root(
       embeddings=jax.tree.map(_zeros, root.embedding),
       root_invalid_actions=root_invalid_actions,
       extra_data=extra_data,
-      beta=beta,
+      beta_v=beta_v,
+      raw_cost_values=jnp.zeros(batch_node, dtype=data_dtype),
+      node_cost_values=jnp.zeros(batch_node, dtype=data_dtype),
+      children_costs=jnp.zeros(batch_node_action, dtype=data_dtype),
+      children_cost_values=jnp.zeros(batch_node_action, dtype=data_dtype),
+      raw_cost_values_epistemic_variance=jnp.zeros(batch_node, dtype=data_dtype),
+      node_cost_values_epistemic_std=jnp.zeros(batch_node, dtype=data_dtype),
+      children_costs_epistemic_variance=jnp.zeros(batch_node_action, dtype=data_dtype),
+      children_cost_values_epistemic_std=jnp.zeros(batch_node_action, dtype=data_dtype),
+      beta_c=beta_c,
+      cost_threshold=cost_threshold,
   )
 
   root_index = jnp.full([batch_size], EpistemicTree.ROOT_INDEX)
+  root_cumulative_cost = jnp.zeros(batch_size, dtype=data_dtype)
   tree = update_tree_node(
-      tree, root_index, root.prior_logits, root.value, root.value_epistemic_variance, root.embedding)
+      tree, root_index, root.prior_logits, root.value, root.value_epistemic_variance, 
+      root_cumulative_cost, root.cost_value, root.cost_value_epistemic_variance, root.embedding)
   return tree

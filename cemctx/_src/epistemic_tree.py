@@ -78,7 +78,20 @@ class EpistemicTree(Generic[T]):
   node_values_epistemic_std: chex.Array  # [B, N]
   children_rewards_epistemic_variance: chex.Array  # [B, N, num_actions]
   children_values_epistemic_std: chex.Array  # [B, N, num_actions]
-  beta: chex.Array   # [B]
+  beta_v: chex.Array   # [B]
+
+  # For CEMCTS:
+  raw_cost_values: chex.Array  # [B, N]
+  node_cost_values: chex.Array  # [B, N]
+  node_cumulative_costs: chex.Array  # [B, N]  # cumulative cost of root to node (C_path in algorithm)
+  children_costs: chex.Array  # [B, N, num_actions]
+  children_cost_values: chex.Array  # [B, N, num_actions]
+  raw_cost_values_epistemic_variance: chex.Array  # [B, N]
+  node_cost_values_epistemic_std: chex.Array  # [B, N]
+  children_costs_epistemic_variance: chex.Array  # [B, N, num_actions]
+  children_cost_values_epistemic_std: chex.Array  # [B, N, num_actions]
+  beta_c: chex.Array   # [B]
+  cost_threshold: chex.Array  # [B]
 
   # The following attributes are class variables (and should not be set on
   # Tree instances).
@@ -112,6 +125,24 @@ class EpistemicTree(Generic[T]):
       return _unbatched_qvalues_epistemic_variance(self, indices)
     # pytype: enable=wrong-arg-types
 
+  def cost_qvalues(self, indices):
+    """Compute cost-values for any node indices in the tree."""
+    # pytype: disable=wrong-arg-types  # jnp-type
+    if jnp.asarray(indices).shape:
+      return jax.vmap(_unbatched_cost_qvalues)(self, indices)
+    else:
+      return _unbatched_cost_qvalues(self, indices)
+    # pytype: enable=wrong-arg-types
+
+  def cost_qvalues_epistemic_variance(self, indices):
+    """Compute epistemic variance of cost-values for any node indices in the tree."""
+    # pytype: disable=wrong-arg-types  # jnp-type
+    if jnp.asarray(indices).shape:
+      return jax.vmap(_unbatched_cost_qvalues_epistemic_variance)(self, indices)
+    else:
+      return _unbatched_cost_qvalues_epistemic_variance(self, indices)
+    # pytype: enable=wrong-arg-types
+
   def summary(self) -> SearchSummary:
     """Extract summary statistics for the root node."""
     # Get state and action values for the root nodes.
@@ -138,10 +169,14 @@ class EpistemicTree(Generic[T]):
     chex.assert_rank(self.node_values, 2)
     value = self.node_values[:, EpistemicTree.ROOT_INDEX]
     value_epistemic_std = self.node_values_epistemic_std[:, EpistemicTree.ROOT_INDEX]
+    cost_value = self.node_cost_values[:, EpistemicTree.ROOT_INDEX]
+    cost_value_epistemic_std = self.node_cost_values_epistemic_std[:, EpistemicTree.ROOT_INDEX]
     batch_size, = value.shape
     root_indices = jnp.full((batch_size,), EpistemicTree.ROOT_INDEX)
     qvalues = self.qvalues(root_indices)
     qvalues_epistemic_variance = self.qvalues_epistemic_variance(root_indices)
+    cost_qvalues = self.cost_qvalues(root_indices)
+    cost_qvalues_epistemic_variance = self.cost_qvalues_epistemic_variance(root_indices)
     # Extract visit counts and induced probabilities for the root nodes.
     visit_counts = self.children_visits[:, EpistemicTree.ROOT_INDEX].astype(value.dtype)
     total_counts = jnp.sum(visit_counts, axis=-1, keepdims=True)
@@ -154,7 +189,11 @@ class EpistemicTree(Generic[T]):
       value=value,
       value_epistemic_std=value_epistemic_std,
       qvalues=qvalues,
-      qvalues_epistemic_variance=qvalues_epistemic_variance
+      qvalues_epistemic_variance=qvalues_epistemic_variance,
+      cost_value=cost_value,
+      cost_value_epistemic_std=cost_value_epistemic_std,
+      cost_qvalues=cost_qvalues,
+      cost_qvalues_epistemic_variance=cost_qvalues_epistemic_variance,
     )
 
 def infer_batch_size(tree: EpistemicTree) -> int:
@@ -176,6 +215,10 @@ class EpistemicSearchSummary:
   value_epistemic_std: chex.Array
   qvalues: chex.Array
   qvalues_epistemic_variance: chex.Array
+  cost_value: chex.Array
+  cost_value_epistemic_std: chex.Array
+  cost_qvalues: chex.Array
+  cost_qvalues_epistemic_variance: chex.Array
 
 def _unbatched_qvalues(tree: EpistemicTree, index: int) -> int:
   chex.assert_rank(tree.children_discounts, 2)
@@ -190,4 +233,19 @@ def _unbatched_qvalues_epistemic_variance(tree: EpistemicTree, index: int) -> in
       # sigma_r(s,a)^2 + gamma^2 sigma_v(s')^2, assuming independence
       tree.children_rewards_epistemic_variance[index]
       + tree.children_discounts[index] * tree.children_discounts[index] * tree.children_values_epistemic_std[index] * tree.children_values_epistemic_std[index]
+  )
+
+def _unbatched_cost_qvalues(tree: EpistemicTree, index: int) -> int:
+  chex.assert_rank(tree.children_discounts, 2)
+  return (  # pytype: disable=bad-return-type  # numpy-scalars
+      tree.children_costs[index]
+      + tree.children_discounts[index] * tree.children_cost_values[index]
+  )
+
+def _unbatched_cost_qvalues_epistemic_variance(tree: EpistemicTree, index: int) -> int:
+  chex.assert_rank(tree.children_discounts, 2)
+  return ( 
+      # variance_c(s,a) + gamma^2 * sigma_vc(s')^2
+      tree.children_costs_epistemic_variance[index] +
+      tree.children_discounts[index]**2 * tree.children_cost_values_epistemic_std[index]**2
   )
