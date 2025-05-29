@@ -19,7 +19,7 @@ import cemctx
 
 
 class MctxTest(absltest.TestCase):
-  """Test emctx can be imported correctly."""
+  """Test cemctx can be imported correctly."""
 
   def test_import(self):
     self.assertTrue(hasattr(cemctx, "gumbel_muzero_policy"))

@@ -230,8 +230,14 @@ def expand(
   chex.assert_shape(step.value, [batch_size])
   chex.assert_shape(step.value_epistemic_variance, [batch_size])
 
+  # Calculate discounted cumulative cost from root to the new node.
+  # TODO: should we also account for uncertainty here?
+  parent_cumulative_cost = tree.node_cumulative_costs[batch_range, parent_index]
+  cumulative_cost = parent_cumulative_cost + step.discount * step.cost
+
   tree = update_tree_node(
-      tree, next_node_index, step.prior_logits, step.value, step.value_epistemic_variance, step.cost_value, step.cost_value_epistemic_variance, embedding)
+      tree, next_node_index, step.prior_logits, step.value, step.value_epistemic_variance, 
+      cumulative_cost, step.cost_value, step.cost_value_epistemic_variance, embedding)
 
   # Return updated tree topology.
   return tree.replace(
@@ -350,6 +356,7 @@ def update_tree_node(
     prior_logits: chex.Array,
     value: chex.Array,
     value_epistemic_variance: chex.Array,
+    cumulative_cost: chex.Array,
     cost_value: chex.Array,
     cost_value_epistemic_variance: chex.Array,
     embedding: chex.Array) -> EpistemicTree[T]:
@@ -397,6 +404,8 @@ def update_tree_node(
           tree.node_cost_values_epistemic_std, jnp.sqrt(cost_value_epistemic_variance), node_index),
       node_visits=batch_update(
           tree.node_visits, new_visit, node_index),
+      node_cumulative_costs=batch_update(
+          tree.node_cumulative_costs, cumulative_cost, node_index),
       embeddings=jax.tree.map(
           lambda t, s: batch_update(t, s, node_index),
           tree.embeddings, embedding)
@@ -462,6 +471,8 @@ def instantiate_tree_from_root(
   )
 
   root_index = jnp.full([batch_size], EpistemicTree.ROOT_INDEX)
+  root_cumulative_cost = jnp.zeros(batch_size, dtype=data_dtype)
   tree = update_tree_node(
-      tree, root_index, root.prior_logits, root.value, root.value_epistemic_variance, root.cost_value, root.cost_value_epistemic_variance, root.embedding)
+      tree, root_index, root.prior_logits, root.value, root.value_epistemic_variance, 
+      root_cumulative_cost, root.cost_value, root.cost_value_epistemic_variance, root.embedding)
   return tree

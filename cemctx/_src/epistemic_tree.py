@@ -83,6 +83,7 @@ class EpistemicTree(Generic[T]):
   # For CEMCTS:
   raw_cost_values: chex.Array  # [B, N]
   node_cost_values: chex.Array  # [B, N]
+  node_cumulative_costs: chex.Array  # [B, N]  # cumulative cost of root to node (C_path in algorithm)
   children_costs: chex.Array  # [B, N, num_actions]
   children_cost_values: chex.Array  # [B, N, num_actions]
   raw_cost_values_epistemic_variance: chex.Array  # [B, N]

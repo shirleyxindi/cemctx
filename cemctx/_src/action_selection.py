@@ -134,10 +134,6 @@ def muzero_action_selection(
       rng_key, (tree.num_actions,))
   to_argmax = value_score + policy_score + node_noise_score
 
-  # Get unsafe actions mask and apply it to the argmax input.
-  unsafe_actions = get_unsafe_actions(tree, node_index)
-  to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
-
   # Masking the invalid actions at the root.
   return masked_argmax(to_argmax, tree.root_invalid_actions * (depth == 0))
 
@@ -305,10 +301,6 @@ def gumbel_muzero_root_action_selection(
   to_argmax = seq_halving.score_considered(
       considered_visit, gumbel, prior_logits, completed_qvalues,
       visit_counts)
-  
-  # Get unsafe actions mask and apply it to the argmax input.
-  unsafe_actions = get_unsafe_actions(tree, node_index)
-  to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
 
   # Masking the invalid actions at the root.
   return masked_argmax(to_argmax, tree.root_invalid_actions)
@@ -349,10 +341,6 @@ def gumbel_muzero_interior_action_selection(
   to_argmax = _prepare_argmax_input(
       probs=jax.nn.softmax(prior_logits + completed_qvalues),
       visit_counts=visit_counts)
-  
-  # Get unsafe actions mask and apply it to the argmax input.
-  unsafe_actions = get_unsafe_actions(tree, node_index)
-  to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
 
   chex.assert_rank(to_argmax, 1)
   return jnp.argmax(to_argmax, axis=-1).astype(jnp.int32)
@@ -376,9 +364,10 @@ def get_unsafe_actions(
   cost_qvalues_epistemic_std = jnp.sqrt(tree.cost_qvalues_epistemic_variance[node_index])
   discounts = tree.children_discounts[node_index]
   beta_c = tree.beta_c
-  cost_path = 0  # TODO: how to keep track of the cost of current path
+  cost_path = tree.node_cumulative_costs[node_index]
   threshold = tree.cost_threshold
 
+  # C_path + discount * cost_qvalues + beta_c * cost_qvalues_epistemic_std
   costs = cost_path + discounts * cost_qvalues + beta_c * cost_qvalues_epistemic_std
 
   unsafe_actions = jnp.where(costs > threshold, 1, 0)  # 1 indicates unsafe action
