@@ -28,22 +28,25 @@ from cemctx._src import epistemic_tree as epistemic_tree_lib
 
 def switching_action_selection_wrapper(
     root_action_selection_fn: base.RootActionSelectionFn,
-    interior_action_selection_fn: base.InteriorActionSelectionFn
+    interior_action_selection_fn: base.InteriorActionSelectionFn,
 ) -> base.InteriorActionSelectionFn:
-  """Wraps root and interior action selection fns in a conditional statement."""
+    """Wraps root and interior action selection fns in a conditional statement."""
 
-  def switching_action_selection_fn(
-      rng_key: chex.PRNGKey,
-      tree: tree_lib.Tree,
-      node_index: base.NodeIndices,
-      depth: base.Depth) -> chex.Array:
-    return jax.lax.cond(
-        depth == 0,
-        lambda x: root_action_selection_fn(*x[:3]),
-        lambda x: interior_action_selection_fn(*x),
-        (rng_key, tree, node_index, depth))
+    def switching_action_selection_fn(
+        rng_key: chex.PRNGKey,
+        tree: tree_lib.Tree,
+        node_index: base.NodeIndices,
+        depth: base.Depth,
+    ) -> chex.Array:
+        return jax.lax.cond(
+            depth == 0,
+            lambda x: root_action_selection_fn(*x[:3]),
+            lambda x: interior_action_selection_fn(*x),
+            (rng_key, tree, node_index, depth),
+        )
 
-  return switching_action_selection_fn
+    return switching_action_selection_fn
+
 
 def epistemic_muzero_action_selection(
     rng_key: chex.PRNGKey,
@@ -55,43 +58,43 @@ def epistemic_muzero_action_selection(
     pb_c_base: float = 19652.0,
     qtransform: base.QTransform = qtransforms.epistemic_qtransform_by_parent_and_siblings,
 ) -> chex.Array:
-  """Returns the action selected for a node index.
+    """Returns the action selected for a node index.
 
-  See Appendix B in https://arxiv.org/pdf/1911.08265.pdf for more details.
+    See Appendix B in https://arxiv.org/pdf/1911.08265.pdf for more details.
 
-  Args:
-    rng_key: random number generator state.
-    tree: _unbatched_ MCTS tree state.
-    node_index: scalar index of the node from which to select an action.
-    depth: the scalar depth of the current node. The root has depth zero.
-    pb_c_init: constant c_1 in the PUCT formula.
-    pb_c_base: constant c_2 in the PUCT formula.
-    qtransform: a monotonic transformation to convert the Q-values to [0, 1].
+    Args:
+      rng_key: random number generator state.
+      tree: _unbatched_ MCTS tree state.
+      node_index: scalar index of the node from which to select an action.
+      depth: the scalar depth of the current node. The root has depth zero.
+      pb_c_init: constant c_1 in the PUCT formula.
+      pb_c_base: constant c_2 in the PUCT formula.
+      qtransform: a monotonic transformation to convert the Q-values to [0, 1].
 
-  Returns:
-    action: the action selected from the given node.
-  """
-  visit_counts = tree.children_visits[node_index]
-  node_visit = tree.node_visits[node_index]
-  pb_c = pb_c_init + jnp.log((node_visit + pb_c_base + 1.) / pb_c_base)
-  prior_logits = tree.children_prior_logits[node_index]
-  prior_probs = jax.nn.softmax(prior_logits)
-  policy_score = jnp.sqrt(node_visit) * pb_c * prior_probs / (visit_counts + 1)
-  chex.assert_shape([node_index, node_visit], ())
-  chex.assert_equal_shape([prior_probs, visit_counts, policy_score])
-  value_score = qtransform(tree, node_index)
+    Returns:
+      action: the action selected from the given node.
+    """
+    visit_counts = tree.children_visits[node_index]
+    node_visit = tree.node_visits[node_index]
+    pb_c = pb_c_init + jnp.log((node_visit + pb_c_base + 1.0) / pb_c_base)
+    prior_logits = tree.children_prior_logits[node_index]
+    prior_probs = jax.nn.softmax(prior_logits)
+    policy_score = jnp.sqrt(node_visit) * pb_c * prior_probs / (visit_counts + 1)
+    chex.assert_shape([node_index, node_visit], ())
+    chex.assert_equal_shape([prior_probs, visit_counts, policy_score])
+    value_score = qtransform(tree, node_index)
 
-  # Add tiny bit of randomness for tie break
-  node_noise_score = 1e-7 * jax.random.uniform(
-      rng_key, (tree.num_actions,))
-  to_argmax = value_score + policy_score + node_noise_score
+    # Add tiny bit of randomness for tie break
+    node_noise_score = 1e-7 * jax.random.uniform(rng_key, (tree.num_actions,))
+    to_argmax = value_score + policy_score + node_noise_score
 
-  # Get unsafe actions mask and apply it to the argmax input.
-  unsafe_actions = get_unsafe_actions(tree, node_index)
-  to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
+    # Get unsafe actions mask and apply it to the argmax input.
+    unsafe_actions = get_unsafe_actions(tree, node_index)
+    to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
 
-  # Masking the invalid actions at the root.
-  return masked_argmax(to_argmax, tree.root_invalid_actions * (depth == 0))
+    # Masking the invalid actions at the root.
+    return masked_argmax(to_argmax, tree.root_invalid_actions * (depth == 0))
+
 
 def muzero_action_selection(
     rng_key: chex.PRNGKey,
@@ -103,49 +106,50 @@ def muzero_action_selection(
     pb_c_base: float = 19652.0,
     qtransform: base.QTransform = qtransforms.qtransform_by_parent_and_siblings,
 ) -> chex.Array:
-  """Returns the action selected for a node index.
+    """Returns the action selected for a node index.
 
-  See Appendix B in https://arxiv.org/pdf/1911.08265.pdf for more details.
+    See Appendix B in https://arxiv.org/pdf/1911.08265.pdf for more details.
 
-  Args:
-    rng_key: random number generator state.
-    tree: _unbatched_ MCTS tree state.
-    node_index: scalar index of the node from which to select an action.
-    depth: the scalar depth of the current node. The root has depth zero.
-    pb_c_init: constant c_1 in the PUCT formula.
-    pb_c_base: constant c_2 in the PUCT formula.
-    qtransform: a monotonic transformation to convert the Q-values to [0, 1].
+    Args:
+      rng_key: random number generator state.
+      tree: _unbatched_ MCTS tree state.
+      node_index: scalar index of the node from which to select an action.
+      depth: the scalar depth of the current node. The root has depth zero.
+      pb_c_init: constant c_1 in the PUCT formula.
+      pb_c_base: constant c_2 in the PUCT formula.
+      qtransform: a monotonic transformation to convert the Q-values to [0, 1].
 
-  Returns:
-    action: the action selected from the given node.
-  """
-  visit_counts = tree.children_visits[node_index]
-  node_visit = tree.node_visits[node_index]
-  pb_c = pb_c_init + jnp.log((node_visit + pb_c_base + 1.) / pb_c_base)
-  prior_logits = tree.children_prior_logits[node_index]
-  prior_probs = jax.nn.softmax(prior_logits)
-  policy_score = jnp.sqrt(node_visit) * pb_c * prior_probs / (visit_counts + 1)
-  chex.assert_shape([node_index, node_visit], ())
-  chex.assert_equal_shape([prior_probs, visit_counts, policy_score])
-  value_score = qtransform(tree, node_index)
+    Returns:
+      action: the action selected from the given node.
+    """
+    visit_counts = tree.children_visits[node_index]
+    node_visit = tree.node_visits[node_index]
+    pb_c = pb_c_init + jnp.log((node_visit + pb_c_base + 1.0) / pb_c_base)
+    prior_logits = tree.children_prior_logits[node_index]
+    prior_probs = jax.nn.softmax(prior_logits)
+    policy_score = jnp.sqrt(node_visit) * pb_c * prior_probs / (visit_counts + 1)
+    chex.assert_shape([node_index, node_visit], ())
+    chex.assert_equal_shape([prior_probs, visit_counts, policy_score])
+    value_score = qtransform(tree, node_index)
 
-  # Add tiny bit of randomness for tie break
-  node_noise_score = 1e-7 * jax.random.uniform(
-      rng_key, (tree.num_actions,))
-  to_argmax = value_score + policy_score + node_noise_score
+    # Add tiny bit of randomness for tie break
+    node_noise_score = 1e-7 * jax.random.uniform(rng_key, (tree.num_actions,))
+    to_argmax = value_score + policy_score + node_noise_score
 
-  # Masking the invalid actions at the root.
-  return masked_argmax(to_argmax, tree.root_invalid_actions * (depth == 0))
+    # Masking the invalid actions at the root.
+    return masked_argmax(to_argmax, tree.root_invalid_actions * (depth == 0))
 
 
 @chex.dataclass(frozen=True)
 class GumbelMuZeroExtraData:
-  """Extra data for Gumbel MuZero search."""
-  root_gumbel: chex.Array
+    """Extra data for Gumbel MuZero search."""
+
+    root_gumbel: chex.Array
 
 
 GumbelMuZeroExtraDataType = TypeVar(  # pylint: disable=invalid-name
-    "GumbelMuZeroExtraDataType", bound=GumbelMuZeroExtraData)
+    "GumbelMuZeroExtraDataType", bound=GumbelMuZeroExtraData
+)
 
 
 def epistemic_gumbel_muzero_root_action_selection(
@@ -157,54 +161,58 @@ def epistemic_gumbel_muzero_root_action_selection(
     max_num_considered_actions: chex.Numeric,
     qtransform: base.QTransform = qtransforms.epistemic_qtransform_completed_by_mix_value,
 ) -> chex.Array:
-  """Returns the action selected by Sequential Halving with Gumbel.
+    """Returns the action selected by Sequential Halving with Gumbel.
 
-  Initially, we sample `max_num_considered_actions` actions without replacement.
-  From these, the actions with the highest `gumbel + logits + qvalues` are
-  visited first.
+    Initially, we sample `max_num_considered_actions` actions without replacement.
+    From these, the actions with the highest `gumbel + logits + qvalues` are
+    visited first.
 
-  Args:
-    rng_key: random number generator state.
-    tree: _unbatched_ MCTS tree state.
-    node_index: scalar index of the node from which to take an action.
-    num_simulations: the simulation budget.
-    max_num_considered_actions: the number of actions sampled without
-      replacement.
-    qtransform: a monotonic transformation for the Q-values.
+    Args:
+      rng_key: random number generator state.
+      tree: _unbatched_ MCTS tree state.
+      node_index: scalar index of the node from which to take an action.
+      num_simulations: the simulation budget.
+      max_num_considered_actions: the number of actions sampled without
+        replacement.
+      qtransform: a monotonic transformation for the Q-values.
 
-  Returns:
-    action: the action selected from the given node.
-  """
-  del rng_key
-  chex.assert_shape([node_index], ())
-  visit_counts = tree.children_visits[node_index]
-  prior_logits = tree.children_prior_logits[node_index]
-  chex.assert_equal_shape([visit_counts, prior_logits])
-  completed_qvalues = qtransform(tree, node_index)
+    Returns:
+      action: the action selected from the given node.
+    """
+    del rng_key
+    chex.assert_shape([node_index], ())
+    visit_counts = tree.children_visits[node_index]
+    prior_logits = tree.children_prior_logits[node_index]
+    chex.assert_equal_shape([visit_counts, prior_logits])
+    completed_qvalues = qtransform(tree, node_index)
 
-  table = jnp.array(seq_halving.get_table_of_considered_visits(
-      max_num_considered_actions, num_simulations))
-  num_valid_actions = jnp.sum(
-      1 - tree.root_invalid_actions, axis=-1).astype(jnp.int32)
-  num_considered = jnp.minimum(
-      max_num_considered_actions, num_valid_actions)
-  chex.assert_shape(num_considered, ())
-  # At the root, the simulation_index is equal to the sum of visit counts.
-  simulation_index = jnp.sum(visit_counts, -1)
-  chex.assert_shape(simulation_index, ())
-  considered_visit = table[num_considered, simulation_index]
-  chex.assert_shape(considered_visit, ())
-  gumbel = tree.extra_data.root_gumbel
-  to_argmax = seq_halving.score_considered(
-      considered_visit, gumbel, prior_logits, completed_qvalues,
-      visit_counts)
-  
-  # Get unsafe actions mask and apply it to the argmax input.
-  unsafe_actions = get_unsafe_actions(tree, node_index)
-  to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
+    table = jnp.array(
+        seq_halving.get_table_of_considered_visits(
+            max_num_considered_actions, num_simulations
+        )
+    )
+    num_valid_actions = jnp.sum(1 - tree.root_invalid_actions, axis=-1).astype(
+        jnp.int32
+    )
+    num_considered = jnp.minimum(max_num_considered_actions, num_valid_actions)
+    chex.assert_shape(num_considered, ())
+    # At the root, the simulation_index is equal to the sum of visit counts.
+    simulation_index = jnp.sum(visit_counts, -1)
+    chex.assert_shape(simulation_index, ())
+    considered_visit = table[num_considered, simulation_index]
+    chex.assert_shape(considered_visit, ())
+    gumbel = tree.extra_data.root_gumbel
+    to_argmax = seq_halving.score_considered(
+        considered_visit, gumbel, prior_logits, completed_qvalues, visit_counts
+    )
 
-  # Masking the invalid actions at the root.
-  return masked_argmax(to_argmax, tree.root_invalid_actions)
+    # Get unsafe actions mask and apply it to the argmax input.
+    # TODO: This is a bit iffy here, the above samples actions, what if it samples the same action and it happens to be the action we are shielding against? Perhaps shielding should happen before sampling
+    unsafe_actions = get_unsafe_actions(tree, node_index)
+    to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
+
+    # Masking the invalid actions at the root.
+    return masked_argmax(to_argmax, tree.root_invalid_actions)
 
 
 def epistemic_gumbel_muzero_interior_action_selection(
@@ -215,40 +223,41 @@ def epistemic_gumbel_muzero_interior_action_selection(
     *,
     qtransform: base.QTransform = qtransforms.epistemic_qtransform_completed_by_mix_value,
 ) -> chex.Array:
-  """Selects the action with a deterministic action selection.
+    """Selects the action with a deterministic action selection.
 
-  The action is selected based on the visit counts to produce visitation
-  frequencies similar to softmax(prior_logits + qvalues).
+    The action is selected based on the visit counts to produce visitation
+    frequencies similar to softmax(prior_logits + qvalues).
 
-  Args:
-    rng_key: random number generator state.
-    tree: _unbatched_ MCTS tree state.
-    node_index: scalar index of the node from which to take an action.
-    depth: the scalar depth of the current node. The root has depth zero.
-    qtransform: function to obtain completed Q-values for a node.
+    Args:
+      rng_key: random number generator state.
+      tree: _unbatched_ MCTS tree state.
+      node_index: scalar index of the node from which to take an action.
+      depth: the scalar depth of the current node. The root has depth zero.
+      qtransform: function to obtain completed Q-values for a node.
 
-  Returns:
-    action: the action selected from the given node.
-  """
-  del rng_key, depth
-  chex.assert_shape([node_index], ())
-  visit_counts = tree.children_visits[node_index]
-  prior_logits = tree.children_prior_logits[node_index]
-  chex.assert_equal_shape([visit_counts, prior_logits])
-  completed_qvalues = qtransform(tree, node_index)
+    Returns:
+      action: the action selected from the given node.
+    """
+    del rng_key, depth
+    chex.assert_shape([node_index], ())
+    visit_counts = tree.children_visits[node_index]
+    prior_logits = tree.children_prior_logits[node_index]
+    chex.assert_equal_shape([visit_counts, prior_logits])
+    completed_qvalues = qtransform(tree, node_index)
 
-  # The `prior_logits + completed_qvalues` provide an improved policy,
-  # because the missing qvalues are replaced by v_{prior_logits}(node).
-  to_argmax = _prepare_argmax_input(
-      probs=jax.nn.softmax(prior_logits + completed_qvalues),
-      visit_counts=visit_counts)
-  
-  # Get unsafe actions mask and apply it to the argmax input.
-  unsafe_actions = get_unsafe_actions(tree, node_index)
-  to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
+    # The `prior_logits + completed_qvalues` provide an improved policy,
+    # because the missing qvalues are replaced by v_{prior_logits}(node).
+    to_argmax = _prepare_argmax_input(
+        probs=jax.nn.softmax(prior_logits + completed_qvalues),
+        visit_counts=visit_counts,
+    )
 
-  chex.assert_rank(to_argmax, 1)
-  return jnp.argmax(to_argmax, axis=-1).astype(jnp.int32)
+    # Get unsafe actions mask and apply it to the argmax input.
+    unsafe_actions = get_unsafe_actions(tree, node_index)
+    to_argmax = jnp.where(unsafe_actions, -jnp.inf, to_argmax)
+
+    chex.assert_rank(to_argmax, 1)
+    return jnp.argmax(to_argmax, axis=-1).astype(jnp.int32)
 
 
 def gumbel_muzero_root_action_selection(
@@ -260,50 +269,53 @@ def gumbel_muzero_root_action_selection(
     max_num_considered_actions: chex.Numeric,
     qtransform: base.QTransform = qtransforms.qtransform_completed_by_mix_value,
 ) -> chex.Array:
-  """Returns the action selected by Sequential Halving with Gumbel.
+    """Returns the action selected by Sequential Halving with Gumbel.
 
-  Initially, we sample `max_num_considered_actions` actions without replacement.
-  From these, the actions with the highest `gumbel + logits + qvalues` are
-  visited first.
+    Initially, we sample `max_num_considered_actions` actions without replacement.
+    From these, the actions with the highest `gumbel + logits + qvalues` are
+    visited first.
 
-  Args:
-    rng_key: random number generator state.
-    tree: _unbatched_ MCTS tree state.
-    node_index: scalar index of the node from which to take an action.
-    num_simulations: the simulation budget.
-    max_num_considered_actions: the number of actions sampled without
-      replacement.
-    qtransform: a monotonic transformation for the Q-values.
+    Args:
+      rng_key: random number generator state.
+      tree: _unbatched_ MCTS tree state.
+      node_index: scalar index of the node from which to take an action.
+      num_simulations: the simulation budget.
+      max_num_considered_actions: the number of actions sampled without
+        replacement.
+      qtransform: a monotonic transformation for the Q-values.
 
-  Returns:
-    action: the action selected from the given node.
-  """
-  del rng_key
-  chex.assert_shape([node_index], ())
-  visit_counts = tree.children_visits[node_index]
-  prior_logits = tree.children_prior_logits[node_index]
-  chex.assert_equal_shape([visit_counts, prior_logits])
-  completed_qvalues = qtransform(tree, node_index)
+    Returns:
+      action: the action selected from the given node.
+    """
+    del rng_key
+    chex.assert_shape([node_index], ())
+    visit_counts = tree.children_visits[node_index]
+    prior_logits = tree.children_prior_logits[node_index]
+    chex.assert_equal_shape([visit_counts, prior_logits])
+    completed_qvalues = qtransform(tree, node_index)
 
-  table = jnp.array(seq_halving.get_table_of_considered_visits(
-      max_num_considered_actions, num_simulations))
-  num_valid_actions = jnp.sum(
-      1 - tree.root_invalid_actions, axis=-1).astype(jnp.int32)
-  num_considered = jnp.minimum(
-      max_num_considered_actions, num_valid_actions)
-  chex.assert_shape(num_considered, ())
-  # At the root, the simulation_index is equal to the sum of visit counts.
-  simulation_index = jnp.sum(visit_counts, -1)
-  chex.assert_shape(simulation_index, ())
-  considered_visit = table[num_considered, simulation_index]
-  chex.assert_shape(considered_visit, ())
-  gumbel = tree.extra_data.root_gumbel
-  to_argmax = seq_halving.score_considered(
-      considered_visit, gumbel, prior_logits, completed_qvalues,
-      visit_counts)
+    table = jnp.array(
+        seq_halving.get_table_of_considered_visits(
+            max_num_considered_actions, num_simulations
+        )
+    )
+    num_valid_actions = jnp.sum(1 - tree.root_invalid_actions, axis=-1).astype(
+        jnp.int32
+    )
+    num_considered = jnp.minimum(max_num_considered_actions, num_valid_actions)
+    chex.assert_shape(num_considered, ())
+    # At the root, the simulation_index is equal to the sum of visit counts.
+    simulation_index = jnp.sum(visit_counts, -1)
+    chex.assert_shape(simulation_index, ())
+    considered_visit = table[num_considered, simulation_index]
+    chex.assert_shape(considered_visit, ())
+    gumbel = tree.extra_data.root_gumbel
+    to_argmax = seq_halving.score_considered(
+        considered_visit, gumbel, prior_logits, completed_qvalues, visit_counts
+    )
 
-  # Masking the invalid actions at the root.
-  return masked_argmax(to_argmax, tree.root_invalid_actions)
+    # Masking the invalid actions at the root.
+    return masked_argmax(to_argmax, tree.root_invalid_actions)
 
 
 def gumbel_muzero_interior_action_selection(
@@ -314,100 +326,102 @@ def gumbel_muzero_interior_action_selection(
     *,
     qtransform: base.QTransform = qtransforms.qtransform_completed_by_mix_value,
 ) -> chex.Array:
-  """Selects the action with a deterministic action selection.
+    """Selects the action with a deterministic action selection.
 
-  The action is selected based on the visit counts to produce visitation
-  frequencies similar to softmax(prior_logits + qvalues).
+    The action is selected based on the visit counts to produce visitation
+    frequencies similar to softmax(prior_logits + qvalues).
 
-  Args:
-    rng_key: random number generator state.
-    tree: _unbatched_ MCTS tree state.
-    node_index: scalar index of the node from which to take an action.
-    depth: the scalar depth of the current node. The root has depth zero.
-    qtransform: function to obtain completed Q-values for a node.
+    Args:
+      rng_key: random number generator state.
+      tree: _unbatched_ MCTS tree state.
+      node_index: scalar index of the node from which to take an action.
+      depth: the scalar depth of the current node. The root has depth zero.
+      qtransform: function to obtain completed Q-values for a node.
 
-  Returns:
-    action: the action selected from the given node.
-  """
-  del rng_key, depth
-  chex.assert_shape([node_index], ())
-  visit_counts = tree.children_visits[node_index]
-  prior_logits = tree.children_prior_logits[node_index]
-  chex.assert_equal_shape([visit_counts, prior_logits])
-  completed_qvalues = qtransform(tree, node_index)
+    Returns:
+      action: the action selected from the given node.
+    """
+    del rng_key, depth
+    chex.assert_shape([node_index], ())
+    visit_counts = tree.children_visits[node_index]
+    prior_logits = tree.children_prior_logits[node_index]
+    chex.assert_equal_shape([visit_counts, prior_logits])
+    completed_qvalues = qtransform(tree, node_index)
 
-  # The `prior_logits + completed_qvalues` provide an improved policy,
-  # because the missing qvalues are replaced by v_{prior_logits}(node).
-  to_argmax = _prepare_argmax_input(
-      probs=jax.nn.softmax(prior_logits + completed_qvalues),
-      visit_counts=visit_counts)
+    # The `prior_logits + completed_qvalues` provide an improved policy,
+    # because the missing qvalues are replaced by v_{prior_logits}(node).
+    to_argmax = _prepare_argmax_input(
+        probs=jax.nn.softmax(prior_logits + completed_qvalues),
+        visit_counts=visit_counts,
+    )
 
-  chex.assert_rank(to_argmax, 1)
-  return jnp.argmax(to_argmax, axis=-1).astype(jnp.int32)
+    chex.assert_rank(to_argmax, 1)
+    return jnp.argmax(to_argmax, axis=-1).astype(jnp.int32)
 
 
 def get_unsafe_actions(
-    tree: epistemic_tree_lib.EpistemicTree,
-    node_index: chex.Numeric
-  ) -> chex.Array:
-  """Returns a mask of unsafe actions for a given node.
-  Args:
-    rng_key: random number generator state.
-    tree: _unbatched_ MCTS tree state.
-    node_index: scalar index of the node from which to take an action.
-    depth: the scalar depth of the current node. The root has depth zero.
-  Returns:
-    unsafe_actions: a boolean array of shape `[num_actions]` where 1
-      indicates that the action is unsafe.
-  """
-  cost_qvalues = tree.cost_qvalues[node_index]
-  cost_qvalues_epistemic_std = jnp.sqrt(tree.cost_qvalues_epistemic_variance[node_index])
-  discounts = tree.children_discounts[node_index]
-  beta_c = tree.beta_c
-  cost_path = tree.node_cumulative_costs[node_index]
-  threshold = tree.cost_threshold
+    tree: epistemic_tree_lib.EpistemicTree, node_index: chex.Numeric
+) -> chex.Array:
+    """Returns a mask of unsafe actions for a given node.
+    Args:
+      rng_key: random number generator state.
+      tree: _unbatched_ MCTS tree state.
+      node_index: scalar index of the node from which to take an action.
+      depth: the scalar depth of the current node. The root has depth zero.
+    Returns:
+      unsafe_actions: a boolean array of shape `[num_actions]` where 1
+        indicates that the action is unsafe.
+    """
+    cost_qvalues = tree.cost_qvalues(node_index)
+    cost_qvalues_epistemic_std = jnp.sqrt(
+        tree.cost_qvalues_epistemic_variance(node_index)
+    )
+    discounts = tree.children_discounts[node_index]
+    beta_c = tree.beta_c
+    cost_path = tree.node_cumulative_costs[node_index]
+    threshold = tree.cost_threshold
 
-  # C_path + discount * cost_qvalues + beta_c * cost_qvalues_epistemic_std
-  costs = cost_path + discounts * cost_qvalues + beta_c * cost_qvalues_epistemic_std
+    # C_path + discount * cost_qvalues + beta_c * cost_qvalues_epistemic_std
+    costs = cost_path + discounts * cost_qvalues + beta_c * cost_qvalues_epistemic_std
 
-  unsafe_actions = jnp.where(costs > threshold, 1, 0)  # 1 indicates unsafe action
+    unsafe_actions = jnp.where(costs > threshold, 1, 0)  # 1 indicates unsafe action
 
-  return unsafe_actions
-
+    return unsafe_actions
 
 
 def masked_argmax(
-    to_argmax: chex.Array,
-    invalid_actions: Optional[chex.Array]) -> chex.Array:
-  """Returns a valid action with the highest `to_argmax`."""
-  if invalid_actions is not None:
-    chex.assert_equal_shape([to_argmax, invalid_actions])
-    # The usage of the -inf inside the argmax does not lead to NaN.
-    # Do not use -inf inside softmax, logsoftmax or cross-entropy.
-    to_argmax = jnp.where(invalid_actions, -jnp.inf, to_argmax)
-  # If all actions are invalid, the argmax returns action 0.
-  return jnp.argmax(to_argmax, axis=-1).astype(jnp.int32)
+    to_argmax: chex.Array, invalid_actions: Optional[chex.Array]
+) -> chex.Array:
+    """Returns a valid action with the highest `to_argmax`."""
+    if invalid_actions is not None:
+        chex.assert_equal_shape([to_argmax, invalid_actions])
+        # The usage of the -inf inside the argmax does not lead to NaN.
+        # Do not use -inf inside softmax, logsoftmax or cross-entropy.
+        to_argmax = jnp.where(invalid_actions, -jnp.inf, to_argmax)
+    # If all actions are invalid, the argmax returns action 0.
+    return jnp.argmax(to_argmax, axis=-1).astype(jnp.int32)
 
 
 def _prepare_argmax_input(probs, visit_counts):
-  """Prepares the input for the deterministic selection.
+    """Prepares the input for the deterministic selection.
 
-  When calling argmax(_prepare_argmax_input(...)) multiple times
-  with updated visit_counts, the produced visitation frequencies will
-  approximate the probs.
+    When calling argmax(_prepare_argmax_input(...)) multiple times
+    with updated visit_counts, the produced visitation frequencies will
+    approximate the probs.
 
-  For the derivation, see Section 5 "Planning at non-root nodes" in
-  "Policy improvement by planning with Gumbel":
-  https://openreview.net/forum?id=bERaNdoegnO
+    For the derivation, see Section 5 "Planning at non-root nodes" in
+    "Policy improvement by planning with Gumbel":
+    https://openreview.net/forum?id=bERaNdoegnO
 
-  Args:
-    probs: a policy or an improved policy. Shape `[num_actions]`.
-    visit_counts: the existing visit counts. Shape `[num_actions]`.
+    Args:
+      probs: a policy or an improved policy. Shape `[num_actions]`.
+      visit_counts: the existing visit counts. Shape `[num_actions]`.
 
-  Returns:
-    The input to an argmax. Shape `[num_actions]`.
-  """
-  chex.assert_equal_shape([probs, visit_counts])
-  to_argmax = probs - visit_counts / (
-      1 + jnp.sum(visit_counts, keepdims=True, axis=-1))
-  return to_argmax
+    Returns:
+      The input to an argmax. Shape `[num_actions]`.
+    """
+    chex.assert_equal_shape([probs, visit_counts])
+    to_argmax = probs - visit_counts / (
+        1 + jnp.sum(visit_counts, keepdims=True, axis=-1)
+    )
+    return to_argmax
