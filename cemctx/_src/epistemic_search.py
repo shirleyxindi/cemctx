@@ -335,6 +335,8 @@ def backward(tree: EpistemicTree[T], leaf_index: chex.Numeric) -> EpistemicTree[
         reward_epistemic_variance = tree.children_rewards_epistemic_variance[
             parent, action
         ]
+
+        # line 19 of EMCTS algorithm
         leaf_value_epistemic_variance = (
             reward_epistemic_variance
             + tree.children_discounts[parent, action]
@@ -360,6 +362,8 @@ def backward(tree: EpistemicTree[T], leaf_index: chex.Numeric) -> EpistemicTree[
 
         # Propagate the uncertainty of costs
         cost_epistemic_variance = tree.children_costs_epistemic_variance[parent, action]
+
+        # Line 19 of EMCTS algorithm
         leaf_cost_value_epistemic_variance = (
             cost_epistemic_variance
             + tree.children_discounts[parent, action]

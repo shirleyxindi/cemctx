@@ -382,9 +382,26 @@ def get_unsafe_actions(
     threshold = tree.cost_threshold
 
     # C_path + discount * cost_qvalues + beta_c * cost_qvalues_epistemic_std
+
     costs = cost_path + discounts * cost_qvalues + beta_c * cost_qvalues_epistemic_std
 
+    least_unsafe_action = jnp.argmin(costs)
+
     unsafe_actions = jnp.where(costs > threshold, 1, 0)  # 1 indicates unsafe action
+
+    # If all actions are unsafe, make the least unsafe action safe
+    unsafe_actions = jax.lax.cond(
+        jnp.all(unsafe_actions == 1),
+        lambda _: unsafe_actions.at[least_unsafe_action].set(0),
+        lambda _: unsafe_actions,
+        operand=None,
+    )
+
+    # jax.debug.print("Costs: {costs}", costs=costs)
+    # jax.debug.print("Unsafe actions: {unsafe_actions}", unsafe_actions=unsafe_actions)
+
+    # TODO: Remove this
+    # unsafe_actions = jnp.zeros_like(unsafe_actions)
 
     return unsafe_actions
 
